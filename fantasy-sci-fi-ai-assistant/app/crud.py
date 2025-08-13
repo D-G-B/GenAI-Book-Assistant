@@ -15,7 +15,7 @@ Example functions we will add:
 """
 
 from sqlalchemy.orm import Session
-from app import models  # ORM models (to be created later in database.py or models.py)
+from app import models  # ORM models (to be created later in database.py or prompt_schemas.py)
 
 # Example placeholder function
 def get_all_documents(db: Session):
