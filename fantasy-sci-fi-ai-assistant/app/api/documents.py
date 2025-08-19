@@ -14,7 +14,8 @@ The routes will use:
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app import crud, lore_schemas
+from app import crud
+from app.lore_schemas import LoreDocumentCreate
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -29,7 +30,7 @@ async def list_documents(db: Session = Depends(get_db)):
 
 
 @router.post("/upload")
-async def upload_document(document: lore_schemas.LoreDocumentCreate, db: Session = Depends(get_db)):
+async def upload_document(document: LoreDocumentCreate, db: Session = Depends(get_db)):
     """
     Upload a new document for the lore assistant.
     Steps (future implementation):
