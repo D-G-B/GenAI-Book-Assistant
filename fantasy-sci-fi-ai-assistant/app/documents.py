@@ -14,12 +14,12 @@ The routes will use:
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app import crud
+from app import crud, lore_schemas
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_document(document: lore_schemas.LoreDocumentCreate, db: Session = Depends(get_db)):
     """
     Upload a new document for the lore assistant.
     Steps (future implementation):
@@ -28,8 +28,9 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
     3. Store chunks in vector DB
     4. Store metadata in SQL database
     """
-    # Placeholder response until implemented
-    return {"filename": file.filename, "status": "upload received"}
+    new_doc = (crud.create_lore_document(db, document))
+    return new_doc
+
 
 @router.get("/list")
 async def list_documents(db: Session = Depends(get_db)):
