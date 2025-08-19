@@ -2,21 +2,25 @@
 Entry point for your FastAPI application.
 
 Creates the FastAPI() app, registers routers from app/api/, and starts the server.
-
-Usually contains:
-
-    Imports of all routes (from app.api import lore, prompt_tester, documents)
-
-    Root health check endpoint (/api/v1/health)
-
-    Uvicorn startup code if run directly.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api import documents
+from app.database import Base, engine
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # This code runs on application startup
+    print("Application startup: Creating database tables...")
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created.")
+    yield # The application will start here
+    # This code runs on application shutdown
+    print("Application shutdown.")
 
+# We pass the lifespan context manager to the FastAPI app
+app = FastAPI(lifespan=lifespan)
 app.include_router(documents.router)
 
 @app.get("/")
