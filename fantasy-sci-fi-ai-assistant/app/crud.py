@@ -17,7 +17,6 @@ Example functions we will add:
 from sqlalchemy.orm import Session
 from app import database, lore_schemas # ORM models (to be created later in database.py or prompt_schemas.py)
 
-# Example placeholder function
 def get_all_documents(db: Session):
     """
     Retrieve all lore documents from the database.
@@ -43,9 +42,9 @@ def  create_lore_document(db: Session, document: lore_schemas.LoreDocumentCreate
         db.commit()
         db.refresh(new_lore_doc)
         return(new_lore_doc)
-    except Exception as e:
+    except Exception:
         db.rollback()
-        return(f"adding lore document failed: {e}")
+        return None
 
 def delete_document(db: Session, document_id: int):
     """
@@ -56,4 +55,15 @@ def delete_document(db: Session, document_id: int):
         document_id (int): the document id of the document to be deleted
     """
 
-    doc_to_del =
+    doc_to_del = db.query(database.LoreDocument).filter(database.LoreDocument.id == document_id).first()
+
+    if not doc_to_del:
+        return None
+
+    try:
+        db.delete(doc_to_del)
+        db.commit()
+        return doc_to_del
+    except Exception:
+        db.rollback()
+        return None
