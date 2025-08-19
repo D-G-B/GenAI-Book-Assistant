@@ -6,7 +6,7 @@ class LoreDocumentBase(BaseModel):
     title: str
     filename: str
     source_type: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    doc_metadata: Optional[Dict[str, Any]] = None
 
 class LoreDocumentCreate(LoreDocumentBase):
     content: Optional[str] = None
@@ -22,7 +22,7 @@ class LoreDocument(LoreDocumentBase):
 class DocumentChunkBase(BaseModel):
     chunk_text: str
     chunk_index: int
-    metadata: Optional[Dict[str, Any]] = None
+    chunk_metadata: Optional[Dict[str, Any]] = None
 
 class DocumentChunk(DocumentChunkBase):
     id: int

@@ -54,7 +54,7 @@ class LoreDocument(Base):
     filename = Column(Text, nullable=False)
     content = Column(Text)
     source_type = Column(String(50))
-    metadata = Column(JSON)
+    doc_metadata = Column(JSON)
     created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
 
     chunks = relationship("DocumentChunk", back_populates="document")
@@ -66,7 +66,7 @@ class DocumentChunk(Base):
     document_id = Column(Integer, ForeignKey("lore_documents.id"), nullable=False)
     chunk_text = Column(Text, nullable=False)
     chunk_index = Column(Integer) # order of chunk in document
-    metadata = Column(JSON)
+    chunk_metadata = Column(JSON)
 
     document = relationship("LoreDocument", back_populates="chunks")
 
