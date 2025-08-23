@@ -9,3 +9,17 @@ This service handles:
 5. Generating answers using LLM with retrieved context
 """
 
+class SimpleLoreService:
+    def __init__(self):
+        pass
+        # Load embedding model
+
+        # Initialize FAISS index
+
+        # Simple in-memory storage
+
+    def chunk_text(self, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
+        """
+        Split text into overlapping chunks of size `chunk_size`
+        Simple implementation - splits by sentence when possible
+        """
