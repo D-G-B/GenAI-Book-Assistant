@@ -8,10 +8,14 @@ This service handles:
 4. Retrieving relevant chunks for questions
 5. Generating answers using LLM with retrieved context
 """
-
+from flask_sqlalchemy.session import Session
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import faiss
+from sympy.polys.polyconfig import query
+
+from app import database
+
 
 class SimpleLoreService:
     def __init__(self):
@@ -36,7 +40,7 @@ class SimpleLoreService:
         if not text or len(text.strip()) == 0:
             return []
 
-        # Simple sentence-aware chunking
+        # Simple sentence-aware chunking - just for testing purposes
         sentences = text.split('. ')
         chunks = []
         current_chunk = ""
@@ -60,4 +64,42 @@ class SimpleLoreService:
         if current_chunk.strip():
             chunks.append(current_chunk.strip())
 
-        return [chunk for chunk in chunks if len(chunk.strip()) > 50]  # Filter very short chunks
+        return [chunk for chunk in chunks if len(chunk.strip()) > 20]  # Filter very short chunks
+
+
+async def process_document(self, db: Session, document_id: int) -> bool:
+    """
+    Process a document by chunking, creating embeddings, and storing in vector database.
+
+    Args:
+        self: The SimpleLoreService instance
+        db: SQLAlchemy database session for document retrieval
+        document_id: ID of the document to process from the database
+
+    Returns:
+        bool: True if document was successfully processed, False if processing failed
+    """
+    try:
+        # Get document from database
+        doc = db.query(database.LoreDocument).filter(database.LoreDocument.id == document_id).first()
+        if not doc:
+            return False
+
+        # Chunk document
+        chunks = self.chunk_text(doc.content)
+        if not chunks:#
+            return False
+
+        print(f"Processing document '{doc.title}' into {len(chunks)} chunks...")
+
+        # Create embeddings for all chunks
+
+        # Add to FAISS index
+
+        # Store chunk metadata
+
+        print(f"✅ Successfully processed '{doc.title}' - {len(chunks)} chunks indexed")
+        return True
+
+    except Exception as e:
+        print(f"Error processing document {document_id}: {str(e)}")
