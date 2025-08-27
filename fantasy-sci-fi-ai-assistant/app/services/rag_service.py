@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from app.database import LoreDocument, LoreQuery
 from app.config import settings
 
+import openai
+import google.generativeai as genai
+
 
 class SimpleRAGService:
     def __init__(self):
@@ -160,7 +163,7 @@ class SimpleRAGService:
             context = "\n\n---\n\n".join(context_parts)
 
             # Create prompts
-            system_prompt = """You are a knowledgeable assistant for documents. 
+            system_prompt = """You are a knowledgeable assistant for documents.
 Answer questions using only the provided context.
 
 Rules:
@@ -176,31 +179,43 @@ Question: {question}
 
 Please answer based only on the provided context."""
 
-            # Get answer from LLM
-            if not settings.OPENAI_API_KEY:
-                return {"error": "OpenAI API key not configured"}
+            answer = ""
+            model_used = ""
 
-            import openai
-            client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            # Check which model to use
+            if settings.DEFAULT_GEMINI_MODEL and settings.GOOGLE_API_KEY:
+                model_used = settings.DEFAULT_GEMINI_MODEL
+                genai.configure(api_key=settings.GOOGLE_API_KEY)
+                model = genai.GenerativeModel(model_name=model_used)
 
-            response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,
-                max_tokens=500
-            )
+                chat_session = model.start_chat()
+                response = await chat_session.send_message_async(user_prompt)
+                answer = response.text
 
-            answer = response.choices[0].message.content
+            elif settings.DEFAULT_OPENAI_MODEL and settings.OPENAI_API_KEY:
+                model_used = settings.DEFAULT_OPENAI_MODEL
+                client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+                response = await client.chat.completions.create(
+                    model=model_used,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=500
+                )
+                answer = response.choices[0].message.content
+
+            else:
+                return {"error": "No valid API key or default model configured"}
 
             # Store query in database
             query_record = LoreQuery(
                 question=question,
                 answer=answer,
                 sources=json.dumps(sources),
-                model_used="gpt-3.5-turbo",
+                model_used=model_used,
                 cost=0.001
             )
 
