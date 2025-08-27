@@ -2,7 +2,7 @@
 Handles the database connection setup and ORM model definitions.
 This file is where we configure SQLAlchemy (or another ORM) and connect to SQLite for MVP.
 
-> switch DATABASE_URL in `.env` to use PostgreSQL in production if needed later.
+> switch DATABASE_URL in `.env` to use Postgres SQL in production if needed later.
 
 Main responsibilities:
 - Create an SQLAlchemy engine and session maker

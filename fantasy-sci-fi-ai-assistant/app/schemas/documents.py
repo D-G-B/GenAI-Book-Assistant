@@ -1,17 +1,17 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
-class LoreDocumentBase(BaseModel):
+class DocumentBase(BaseModel):
     title: str
     filename: str
     source_type: Optional[str] = None
     doc_metadata: Optional[Dict[str, Any]] = None
 
-class LoreDocumentCreate(LoreDocumentBase):
+class DocumentCreate(DocumentBase):
     content: Optional[str] = None
 
-class LoreDocument(LoreDocumentBase):
+class DocumentResponse(DocumentBase):
     id: int
     content: Optional[str] = None
     created_at: datetime
