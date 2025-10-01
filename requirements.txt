@@ -1,8 +1,33 @@
-fastapi
-uvicorn
-sqlalchemy
-python-dotenv
+# Core FastAPI and Database
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+python-dotenv==1.0.0
+pydantic==2.5.0
+
+# LangChain Core
+langchain
+langchain-community
+langchain-core
+
+# LLM Integrations
+langchain-openai
+langchain-google-genai
 openai
-faiss-cpu
-sentence-transformers
-pydantic
+google-generativeai
+
+# Vector Stores and Embeddings
+faiss-cpu==1.8.0
+sentence-transformers==2.2.2
+
+# Search Enhancement
+rank-bm25==0.2.2
+
+# Document Processing (optional - install if needed)
+pypdf==3.17.4
+python-docx==1.1.0
+python-multipart==0.0.6
+
+# Utilities
+numpy==1.26.2
+tiktoken==0.5.2

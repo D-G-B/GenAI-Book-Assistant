@@ -73,6 +73,8 @@ class DocumentChunk(Base):
 class LoreQuery(Base):
     __tablename__ = "lore_queries"
 
+    model_config = {"protected_namespaces": ()}
+
     id = Column(Integer, primary_key=True)
     question = Column(Text, nullable=False)
     answer =  Column(Text)

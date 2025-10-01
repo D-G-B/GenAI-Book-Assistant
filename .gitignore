@@ -30,7 +30,7 @@ env/
 ENV/
 env.bak/
 venv.bak/
-.venv
+.venv/
 
 # IDE
 .vscode/

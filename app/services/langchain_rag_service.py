@@ -130,91 +130,88 @@ class LangChainRAGService:
             return False
 
     async def ask_question(self, question: str, db: Session) -> Dict[str, Any]:
-        """
-        Compare this to your ask_question method!
 
-        YOUR METHOD (~80 lines):
-        - Manual search_chunks call
-        - Manual context building
-        - Manual prompt construction
-        - Manual LLM API calls (different for each provider)
-        - Manual result formatting
 
-        LANGCHAIN METHOD (~30 lines):
-        - Create chain once
-        - Call chain
-        - Done!
-        """
-        if not self.vector_store or not self.llm:
-            return {"error": "Service not ready"}
+
+        """Enhanced question answering with LangChain"""
+        if not question.strip():
+            return {"error": "Question cannot be empty"}
+
+        if not self.vector_store:
+            return {
+                "answer": "I don't have any documents to search through. Please upload and process some documents first!",
+                "sources": [],
+                "confidence": 0.0,
+                "chunks_used": 0
+            }
+
+        if not self.llm:
+            return {"error": "No language model configured"}
 
         try:
-            # LANGCHAIN MAGIC #4: Prompt Templates
-            # Instead of hardcoded f-strings, templates are:
-            # - Reusable
-            # - Testable
-            # - Easy to modify
+            # Create prompt template
             prompt_template = """You are a knowledgeable assistant for fantasy/sci-fi documents.
 
-Context from documents:
-{context}
+    Context from documents:
+    {context}
 
-Question: {question}
+    Question: {question}
 
-Instructions:
-- Only use information from the provided context
-- Be specific and cite sources
-- If unsure, say so
+    Instructions:
+    - Only use information from the provided context
+    - Be specific and cite sources
+    - If unsure, say so
 
-Answer:"""
+    Answer:"""
 
             PROMPT = PromptTemplate(
                 template=prompt_template,
                 input_variables=["context", "question"]
             )
 
-            # LANGCHAIN MAGIC #5: Retrieval Chains
-            # This ONE object handles:
-            # - Retrieving relevant chunks (your search_chunks)
-            # - Building context (your manual join)
-            # - Calling LLM (your manual API calls)
-            # - Formatting response
+            # Create retrieval chain
             retriever = self.vector_store.as_retriever(search_kwargs={"k": 4})
 
             qa_chain = RetrievalQA.from_chain_type(
                 llm=self.llm,
-                chain_type="stuff",  # Stuffs all docs into context
+                chain_type="stuff",
                 retriever=retriever,
                 chain_type_kwargs={"prompt": PROMPT},
                 return_source_documents=True
             )
 
-            # LANGCHAIN MAGIC #6: Async Execution
-            # One line does everything!
+            # Execute the chain
+            print(f"🤔 Processing question: {question}")
             result = qa_chain({"query": question})
 
-            # Format response (similar to yours)
+            # Extract answer safely
+            answer = result.get('result', 'No answer generated')
+            source_docs = result.get('source_documents', [])
+
+            # Format sources
             sources = []
-            for doc in result.get('source_documents', []):
+            for i, doc in enumerate(source_docs):
                 sources.append({
-                    "document_title": doc.metadata.get('document_title'),
-                    "chunk_index": doc.metadata.get('chunk_index'),
-                    "similarity_score": 0.85  # Simplified
+                    "document_title": doc.metadata.get('document_title', 'Unknown'),
+                    "chunk_index": doc.metadata.get('chunk_index', i),
+                    "similarity_score": 0.85
                 })
 
             return {
-                "answer": result['result'],
+                "answer": answer,
                 "sources": sources,
                 "confidence": 0.8,
                 "chunks_used": len(sources)
             }
 
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"❌ Error generating answer: {e}")
+            import traceback
+            traceback.print_exc()
             return {"error": str(e)}
 
     def get_status(self) -> Dict[str, Any]:
-        """Simple status check"""
+        """Get service status information"""
         chunk_count = 0
         if self.vector_store:
             try:
@@ -226,9 +223,9 @@ Answer:"""
             "service": "LangChain Enhanced",
             "total_chunks": chunk_count,
             "llm_available": self.llm is not None,
+            "vector_store_ready": self.vector_store is not None,
             "status": "ready" if chunk_count > 0 and self.llm else "not_ready"
-        }
-
+    }
 
 # Create a global instance (just like your rag_service)
 langchain_rag_service = LangChainRAGService()
