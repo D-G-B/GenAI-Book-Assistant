@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Assistant</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>RAG Assistant</h1>
+            <p class="subtitle">Upload documents and ask questions</p>
+        </header>
+
+        <div class="layout">
+            <aside class="sidebar">
+                <div class="section-title">Upload</div>
+                <input type="text" id="docTitle" placeholder="Document title">
+                <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx">
+                <button class="btn" onclick="uploadDocument()">Upload & Process</button>
+
+                <div class="section-title" style="margin-top: 30px;">Documents</div>
+                <div id="documentList" class="document-list"></div>
+            </aside>
+
+            <main>
+                <div class="chat-container">
+                    <div class="chat-header">
+                        <h2 style="font-size: 1.1em; font-weight: 600;">Chat</h2>
+                        <div class="mode-toggle">
+                            <button class="mode-btn active" onclick="setMode('simple')">Simple Q&A</button>
+                            <button class="mode-btn" onclick="setMode('conversational')">Conversational</button>
+                        </div>
+                        <div class="session-info" id="sessionInfo" style="display: none;">
+                            Session: <span id="sessionId"></span>
+                        </div>
+                    </div>
+
+                    <div class="messages" id="messages">
+                        <div class="message assistant">
+                            <p>Upload documents and ask questions to get started.</p>
+                        </div>
+                    </div>
+
+                    <div class="input-area">
+                        <input type="text" id="questionInput" placeholder="Ask a question..."
+                               onkeypress="if(event.key === 'Enter') askQuestion()">
+                        <button onclick="askQuestion()" id="askBtn">Send</button>
+                    </div>
+                </div>
+
+                <div class="status" id="status"></div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

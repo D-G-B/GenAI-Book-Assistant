@@ -19,31 +19,8 @@ from langchain.prompts import PromptTemplate
 from app.database import LoreDocument
 from app.config import settings
 
-
-class DocumentProcessor:
-    """Handles document loading and processing for different formats."""
-
-    def __init__(self):
-        self.supported_formats = ['.txt', '.md']  # Can extend with .pdf, .docx later
-
-    def process_content(self, content: str, filename: str, metadata: Dict[str, Any]) -> List[Document]:
-        """Process document content into LangChain Document objects."""
-        if not content or not content.strip():
-            return []
-
-        # Extract additional metadata
-        file_ext = filename.lower().split('.')[-1] if '.' in filename else 'txt'
-
-        enhanced_metadata = {
-            **metadata,
-            'filename': filename,
-            'file_extension': file_ext,
-            'content_length': len(content),
-            'word_count': len(content.split())
-        }
-
-        # Create a single document (will be chunked later by text splitter)
-        return [Document(page_content=content, metadata=enhanced_metadata)]
+# Import the advanced document processor
+from app.services.advanced_document_loaders import document_processor as advanced_doc_processor
 
 
 class EnhancedRAGService:
@@ -66,8 +43,8 @@ class EnhancedRAGService:
             length_function=len
         )
 
-        # Document processor
-        self.document_processor = DocumentProcessor()
+        # Use the advanced document processor
+        self.document_processor = advanced_doc_processor
 
         # Storage
         self.vector_store = None
@@ -83,11 +60,12 @@ class EnhancedRAGService:
         # Tracking
         self.processed_documents = {}
 
-        print("✅ Enhanced RAG Service initialized")
+        print("✅ Enhanced RAG Service initialized with advanced document loaders")
 
     def _initialize_llm(self):
         """Initialize the appropriate LLM based on available API keys."""
         if settings.GOOGLE_API_KEY and settings.DEFAULT_GEMINI_MODEL:
+            print(f"✅ Using Google Gemini: {settings.DEFAULT_GEMINI_MODEL}")
             return ChatGoogleGenerativeAI(
                 model=settings.DEFAULT_GEMINI_MODEL,
                 google_api_key=settings.GOOGLE_API_KEY,
@@ -95,6 +73,7 @@ class EnhancedRAGService:
                 max_tokens=1000
             )
         elif settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
+            print(f"✅ Using OpenAI: {settings.DEFAULT_OPENAI_MODEL}")
             return ChatOpenAI(
                 model_name=settings.DEFAULT_OPENAI_MODEL,
                 openai_api_key=settings.OPENAI_API_KEY,
@@ -114,7 +93,7 @@ class EnhancedRAGService:
             print("⚠️ Conversational features not available (no LLM)")
 
     async def process_document(self, db: Session, document_id: int) -> bool:
-        """Process a document with enhanced capabilities."""
+        """Process a document with enhanced capabilities using advanced loaders."""
         start_time = time.time()
 
         try:
@@ -124,7 +103,7 @@ class EnhancedRAGService:
                 print(f"❌ Document {document_id} not found or has no content")
                 return False
 
-            print(f"📄 Processing: {doc.title}")
+            print(f"📄 Processing: {doc.title} ({doc.filename})")
 
             # Create base metadata
             base_metadata = {
@@ -133,7 +112,8 @@ class EnhancedRAGService:
                 'source_type': doc.source_type or 'text'
             }
 
-            # Process document content
+            # Use advanced document processor to handle different file types
+            # This will automatically handle PDFs, Word docs, CSVs, etc.
             initial_docs = self.document_processor.process_content(
                 doc.content,
                 doc.filename,
