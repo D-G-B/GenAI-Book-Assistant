@@ -52,9 +52,9 @@ async def delete_document(document_id: int, db: Session = Depends(get_db)):
 @router.post("/{document_id}/process")
 async def process_document(document_id: int, db: Session = Depends(get_db)):
     """Process uploaded document for RAG (chunking and embedding)."""
-    from app.services.rag_service import rag_service
+    from app.services.enhanced_rag_service import enhanced_rag_service
 
-    success = await rag_service.process_document(db, document_id)
+    success = await enhanced_rag_service.process_document(db, document_id)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to process document")
 

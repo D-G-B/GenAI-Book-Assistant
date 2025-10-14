@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.chat import ChatRequest, ChatResponse, ServiceStatus
-from app.services.rag_service import rag_service
+from app.services.enhanced_rag_service import enhanced_rag_service
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -17,7 +17,7 @@ async def ask_question(request: ChatRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
     try:
-        result = await rag_service.ask_question(request.question, db)
+        result = await enhanced_rag_service.ask_question(request.question, db)
 
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -29,4 +29,4 @@ async def ask_question(request: ChatRequest, db: Session = Depends(get_db)):
 @router.get("/status", response_model=ServiceStatus)
 async def get_status():
     """Get the current status of the RAG service."""
-    return ServiceStatus(**rag_service.get_status())
+    return ServiceStatus(**enhanced_rag_service.get_status())

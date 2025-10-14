@@ -1,11 +1,13 @@
 """
-Entry point - now includes BOTH original and enhanced services
+Production FastAPI application with enhanced RAG and conversational memory
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from app.api import chat_routes, documents_routes
-from app.api import comparison_routes, conversational_routes
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from app.api import chat_routes, documents_routes, conversational_routes
 from app.database import Base, engine, SessionLocal, LoreDocument
 from app.config import settings
 
@@ -15,69 +17,55 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     settings.validate_api_keys()
 
-    # Initialize BOTH services
-    from app.services.rag_service import rag_service
-    from app.services.langchain_rag_service import langchain_rag_service
+    # Initialize enhanced service
+    from app.services.enhanced_rag_service import enhanced_rag_service
 
-    print("✅ Original RAG service ready")
-    print("✅ LangChain RAG service ready")
+    print("✅ Enhanced RAG service ready")
 
-    # Process any existing documents on startup
-    db = SessionLocal()  # This creates a database session
+    # Process existing documents
+    db = SessionLocal()
     try:
         docs = db.query(LoreDocument).all()
         if docs:
             print(f"\n📚 Found {len(docs)} existing documents")
             for doc in docs:
                 print(f"   Processing: {doc.title}")
-                # Process with both services
-                await rag_service.process_document(db, doc.id)
-                await langchain_rag_service.process_document(db, doc.id)
-            print("✅ All documents processed by both services\n")
+                await enhanced_rag_service.process_document(db, doc.id)
+            print("✅ All documents processed\n")
     finally:
-        db.close()  # Always close the session when done
+        db.close()
 
     yield
     print("👋 Application shutdown")
 
 app = FastAPI(
-    title="RAG Assistant - Original + LangChain",
-    description="Compare your original RAG with LangChain enhanced version",
-    version="0.2.0",
+    title="Fantasy RAG Assistant",
+    description="RAG-powered chat assistant with conversational memory",
+    version="1.0.0",
     lifespan=lifespan
 )
 
-# Original routes
+# Mount static files and templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+# API routes
 app.include_router(documents_routes.router, prefix="/api/v1")
 app.include_router(chat_routes.router, prefix="/api/v1")
-
-# New Comparison routes
-app.include_router(comparison_routes.router, prefix="/api/v1")
-
-# Conversational Routes
 app.include_router(conversational_routes.router, prefix="/api/v1")
 
+# Frontend
 @app.get("/")
-async def root():
-    return {
-        "message": "RAG Assistant with Original + LangChain",
-        "original_endpoints": [
-            "/api/v1/chat/ask",
-            "/api/v1/chat/status"
-        ],
-        "comparison_endpoints": [
-            "/api/v1/compare/ask-original",
-            "/api/v1/compare/ask-langchain",
-            "/api/v1/compare/ask-both"
-        ],
-        "docs": "/docs"
-    }
+async def root(request: Request):
+    """Serve the main frontend application"""
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/health")
 async def health_check():
+    """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": "0.2.0"
+        "version": "1.0.0"
     }
 
 if __name__ == "__main__":
