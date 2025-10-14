@@ -22,28 +22,57 @@ function setMode(mode) {
     }
 }
 
+async function uploadDocument() {
+    const titleInput = document.getElementById('docTitle');
+    const fileInput = document.getElementById('fileInput');
 
-                    method: 'POST'
-                });
+    const title = titleInput.value.trim();
+    const file = fileInput.files[0];
 
-                if (processResponse.ok) {
-                    addMessage('assistant', `Document "${title}" uploaded and processed successfully.`);
-                    titleInput.value = '';
-                    fileInput.value = '';
-                    loadDocuments();
-                    loadStatus();
-                } else {
-                    alert('Document uploaded but processing failed');
-                }
+    if (!file) {
+        alert('Please select a file');
+        return;
+    }
+
+    // Create FormData for file upload
+    const formData = new FormData();
+    formData.append('file', file);
+    if (title) {
+        formData.append('title', title);
+    }
+
+    try {
+        // Upload file using multipart/form-data
+        const response = await fetch('/api/v1/documents/upload-file', {
+            method: 'POST',
+            body: formData  // Don't set Content-Type, browser sets it with boundary
+        });
+
+        if (response.ok) {
+            const doc = await response.json();
+
+            // Process the document
+            const processResponse = await fetch(`/api/v1/documents/${doc.id}/process`, {
+                method: 'POST'
+            });
+
+            if (processResponse.ok) {
+                addMessage('assistant', `Document "${doc.title}" uploaded and processed successfully.`);
+                titleInput.value = '';
+                fileInput.value = '';
+                loadDocuments();
+                loadStatus();
             } else {
-                alert('Failed to upload document');
+                const errorData = await processResponse.json();
+                addMessage('assistant', `Document uploaded but processing failed: ${errorData.detail || 'Unknown error'}`);
             }
-        } catch (error) {
-            alert('Error: ' + error.message);
+        } else {
+            const errorData = await response.json();
+            alert(`Failed to upload document: ${errorData.detail || 'Unknown error'}`);
         }
-    };
-
-    reader.readAsText(file);
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
 }
 
 async function loadDocuments() {

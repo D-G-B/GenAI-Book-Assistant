@@ -98,38 +98,73 @@ class EnhancedRAGService:
 
         try:
             # Get document from database
-            doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
-            if not doc or not doc.content:
+            db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
+            if not db_doc or not db_doc.content:
                 print(f"❌ Document {document_id} not found or has no content")
                 return False
 
-            print(f"📄 Processing: {doc.title} ({doc.filename})")
+            print(f"📄 Processing: {db_doc.title} ({db_doc.filename})")
+
+            # Check if content is a placeholder for failed extraction
+            if db_doc.content.startswith('[PDF') and 'extraction failed' in db_doc.content:
+                print(f"⚠️ Skipping document with failed extraction: {db_doc.filename}")
+                return False
 
             # Create base metadata
             base_metadata = {
                 'document_id': document_id,
-                'document_title': doc.title,
-                'source_type': doc.source_type or 'text'
+                'document_title': db_doc.title,
+                'source_type': db_doc.source_type or 'text'
             }
 
             # Use advanced document processor to handle different file types
-            # This will automatically handle PDFs, Word docs, CSVs, etc.
-            initial_docs = self.document_processor.process_content(
-                doc.content,
-                doc.filename,
-                base_metadata
-            )
+            try:
+                initial_docs = self.document_processor.process_content(
+                    db_doc.content,
+                    db_doc.filename,
+                    base_metadata
+                )
+            except Exception as e:
+                print(f"❌ Error with document processor: {e}")
+                # Fallback to treating as plain text
+                if len(db_doc.content.strip()) > 20:
+                    initial_docs = [Document(page_content=db_doc.content, metadata=base_metadata)]
+                else:
+                    print(f"❌ Content too short or invalid")
+                    return False
 
             if not initial_docs:
                 print(f"❌ No valid content from document {document_id}")
                 return False
 
-            # Split into chunks
+            # Split into chunks and validate
             final_documents = []
             for document in initial_docs:
-                chunks = self.text_splitter.split_text(document.page_content)
+                # Skip empty documents
+                if not document.page_content or not document.page_content.strip():
+                    print(f"⚠️ Skipping empty document chunk")
+                    continue
+
+                # Skip very short content
+                if len(document.page_content.strip()) < 20:
+                    print(f"⚠️ Skipping very short content")
+                    continue
+
+                try:
+                    chunks = self.text_splitter.split_text(document.page_content)
+                except Exception as e:
+                    print(f"⚠️ Error splitting text: {e}")
+                    continue
 
                 for i, chunk in enumerate(chunks):
+                    # Validate chunk has actual content
+                    if not chunk or not chunk.strip():
+                        continue
+
+                    # Skip chunks that are too short (less than 10 chars)
+                    if len(chunk.strip()) < 10:
+                        continue
+
                     chunk_metadata = document.metadata.copy()
                     chunk_metadata.update({
                         'chunk_index': i,
@@ -137,31 +172,57 @@ class EnhancedRAGService:
                     })
 
                     final_documents.append(Document(
-                        page_content=chunk,
+                        page_content=chunk.strip(),
                         metadata=chunk_metadata
                     ))
+
+            if not final_documents:
+                print(f"❌ No valid chunks created from document {document_id}")
+                return False
+
+            print(f"✅ Created {len(final_documents)} valid chunks")
 
             # Store documents
             self.documents.extend(final_documents)
 
-            # Update or create vector store
-            if self.vector_store is None:
-                self.vector_store = FAISS.from_documents(final_documents, self.embeddings)
-                print(f"✅ Created vector store with {len(final_documents)} chunks")
-            else:
-                self.vector_store.add_documents(final_documents)
-                print(f"✅ Added {len(final_documents)} chunks to vector store")
+            # Update or create vector store with better error handling
+            try:
+                if self.vector_store is None:
+                    self.vector_store = FAISS.from_documents(final_documents, self.embeddings)
+                    print(f"✅ Created vector store with {len(final_documents)} chunks")
+                else:
+                    # Add documents one at a time to catch individual failures
+                    success_count = 0
+                    for doc in final_documents:
+                        try:
+                            self.vector_store.add_documents([doc])
+                            success_count += 1
+                        except Exception as e:
+                            print(f"⚠️ Failed to add chunk {doc.metadata.get('chunk_index', '?')}: {e}")
+                            continue
+
+                    if success_count > 0:
+                        print(f"✅ Added {success_count}/{len(final_documents)} chunks to vector store")
+                    else:
+                        print(f"❌ Failed to add any chunks")
+                        return False
+
+            except Exception as e:
+                print(f"❌ Error with vector store: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
 
             # Track processing
             processing_time = time.time() - start_time
             self.processed_documents[document_id] = {
-                'title': doc.title,
-                'filename': doc.filename,
+                'title': db_doc.title,
+                'filename': db_doc.filename,
                 'chunk_count': len(final_documents),
                 'processing_time': processing_time
             }
 
-            print(f"✅ Processed '{doc.title}' in {processing_time:.2f}s - {len(final_documents)} chunks")
+            print(f"✅ Processed '{db_doc.title}' in {processing_time:.2f}s - {len(final_documents)} chunks")
             return True
 
         except Exception as e:
