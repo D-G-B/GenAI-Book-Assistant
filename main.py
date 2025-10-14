@@ -5,7 +5,7 @@ Entry point - now includes BOTH original and enhanced services
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api import chat_routes, documents_routes
-from app.api import comparison_routes
+from app.api import comparison_routes, conversational_routes
 from app.database import Base, engine, SessionLocal, LoreDocument
 from app.config import settings
 
@@ -53,6 +53,9 @@ app.include_router(chat_routes.router, prefix="/api/v1")
 
 # New Comparison routes
 app.include_router(comparison_routes.router, prefix="/api/v1")
+
+# Conversational Routes
+app.include_router(conversational_routes.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

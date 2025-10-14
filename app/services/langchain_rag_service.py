@@ -49,6 +49,9 @@ class LangChainRAGService:
 
         print("✅ LangChain RAG Service initialized")
 
+        #Initialize conversational features
+        self._setup_conversational_rag()
+
     def _initialize_llm(self):
         """Initialize LLM - much cleaner than manual API calls"""
         if settings.GOOGLE_API_KEY:
@@ -65,6 +68,17 @@ class LangChainRAGService:
             )
         return None
 
+    def _setup_conversational_rag(self):
+        """Initialize conversational RAG system."""
+        from app.services.conversational_memory import initialize_context_aware_rag
+
+        if self.llm:
+            self.context_aware_rag = initialize_context_aware_rag(self)
+        else:
+            self.context_aware_rag = None
+            print("⚠️ Conversational features not available (no LLM)")
+
+    
     async def process_document(self, db: Session, document_id: int) -> bool:
         """
         Compare this to your process_document method!
