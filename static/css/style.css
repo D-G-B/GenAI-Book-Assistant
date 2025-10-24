@@ -202,6 +202,27 @@ input[type="file"] {
     color: #666;
 }
 
+.doc-filter {
+    width: 100%;
+    padding: 8px 12px;
+    background: #0a0a0a;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 0.85em;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.doc-filter:hover {
+    border-color: #444;
+}
+
+.doc-filter:focus {
+    outline: none;
+    border-color: #666;
+}
+
 .messages {
     flex: 1;
     overflow-y: auto;

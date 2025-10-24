@@ -45,7 +45,7 @@ async function uploadDocument() {
         // Upload file using multipart/form-data
         const response = await fetch('/api/v1/documents/upload-file', {
             method: 'POST',
-            body: formData  // Don't set Content-Type, browser sets it with boundary
+            body: formData
         });
 
         if (response.ok) {
@@ -81,12 +81,15 @@ async function loadDocuments() {
         const docs = await response.json();
 
         const listDiv = document.getElementById('documentList');
+        const filterSelect = document.getElementById('documentFilter');
 
         if (docs.length === 0) {
             listDiv.innerHTML = '<div style="color: #666; font-size: 0.85em; text-align: center; padding: 20px;">No documents yet</div>';
+            filterSelect.innerHTML = '<option value="">Search in: All Documents</option>';
             return;
         }
 
+        // Update document list
         listDiv.innerHTML = docs.map(doc => `
             <div class="doc-item">
                 <div>
@@ -96,6 +99,11 @@ async function loadDocuments() {
                 <button class="delete-btn" onclick="deleteDocument(${doc.id})">Delete</button>
             </div>
         `).join('');
+
+        // Update document filter dropdown
+        filterSelect.innerHTML = '<option value="">Search in: All Documents</option>' +
+            docs.map(doc => `<option value="${doc.id}">${doc.title}</option>`).join('');
+
     } catch (error) {
         console.error('Failed to load documents:', error);
     }
@@ -130,13 +138,23 @@ async function askQuestion() {
     askBtn.innerHTML = '<span class="loading"></span>';
 
     try {
+        // Get selected document filter
+        const filterSelect = document.getElementById('documentFilter');
+        const documentId = filterSelect.value;
+
         let url, body;
 
         if (currentMode === 'conversational') {
             url = `/api/v1/conversation/ask?session_id=${sessionId}`;
+            if (documentId) {
+                url += `&document_id=${documentId}`;
+            }
             body = {question: question};
         } else {
             url = '/api/v1/chat/ask';
+            if (documentId) {
+                url += `?document_id=${documentId}`;
+            }
             body = {question: question, max_chunks: 3};
         }
 

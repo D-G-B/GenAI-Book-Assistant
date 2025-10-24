@@ -85,7 +85,6 @@ class ConversationMemoryManager:
         memory = self.create_memory(k=5)
 
         # Custom prompt for conversational context
-        # FIXED: Separate template string to avoid nested triple quotes
         condense_question_template = """
 Given the following conversation and a follow-up question, rephrase the follow-up question to be a standalone question that incorporates relevant context from the conversation history.
 
@@ -123,9 +122,10 @@ class ContextAwareRAG:
         self,
         question: str,
         session_id: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        document_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Ask a question with conversational context."""
+        """Ask a question with conversational context, optionally filtered to a document."""
 
         if not question.strip():
             return {"error": "Question cannot be empty"}
@@ -140,18 +140,28 @@ class ContextAwareRAG:
             # Get or create session
             session = self.memory_manager.get_or_create_session(session_id, user_id)
 
-            # Create or get conversational chain for this session
-            if session_id not in self.active_chains:
+            # Create chain key that includes document_id to maintain separate chains per filter
+            chain_key = f"{session_id}_{document_id}" if document_id else session_id
+
+            # Create or get conversational chain for this session/filter combination
+            if chain_key not in self.active_chains:
+                search_kwargs = {"k": 4}
+
+                if document_id is not None:
+                    # Filter to specific document
+                    search_kwargs["filter"] = lambda metadata: metadata.get("document_id") == document_id
+                    print(f"💬 Conversational search in document ID: {document_id}")
+
                 retriever = self.base_rag.vector_store.as_retriever(
-                    search_kwargs={"k": 4}
+                    search_kwargs=search_kwargs
                 )
                 chain = self.memory_manager.create_conversational_chain(
                     retriever=retriever,
                     llm=self.base_rag.llm
                 )
-                self.active_chains[session_id] = chain
+                self.active_chains[chain_key] = chain
             else:
-                chain = self.active_chains[session_id]
+                chain = self.active_chains[chain_key]
 
             # Add question to session history
             session.add_message('human', question)
@@ -184,7 +194,8 @@ class ContextAwareRAG:
                 "chunks_used": len(sources),
                 "session_id": session_id,
                 "conversation_length": len(session.messages),
-                "context_used": len(session.messages) > 2  # True if more than just this Q&A
+                "context_used": len(session.messages) > 2,  # True if more than just this Q&A
+                "filtered_to_document": document_id
             }
 
         except Exception as e:
@@ -213,8 +224,10 @@ class ContextAwareRAG:
         if session_id in self.memory_manager.sessions:
             del self.memory_manager.sessions[session_id]
 
-        if session_id in self.active_chains:
-            del self.active_chains[session_id]
+        # Clear all chains associated with this session
+        keys_to_delete = [k for k in self.active_chains.keys() if k.startswith(session_id)]
+        for key in keys_to_delete:
+            del self.active_chains[key]
 
         return True
 

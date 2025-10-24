@@ -57,6 +57,8 @@ Thumbs.db
 *.index
 *.faiss
 
+faiss_index/
+
 # Cache
 .cache/
 .pytest_cache/

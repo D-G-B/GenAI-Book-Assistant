@@ -9,6 +9,8 @@ from app.schemas.documents import DocumentCreate, DocumentResponse
 from typing import Optional
 import tempfile
 import os
+import shutil
+from pathlib import Path
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -174,3 +176,28 @@ async def process_document(document_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Failed to process document")
 
     return {"message": "Document processed successfully"}
+
+
+@router.delete("/all")
+async def delete_all_documents(db: Session = Depends(get_db)):
+    """Delete all documents and reset vector store."""
+    try:
+        # Delete all documents from database
+        db.query(LoreDocument).delete()
+        db.commit()
+
+        # Reset vector store
+        from app.services.enhanced_rag_service import enhanced_rag_service
+        enhanced_rag_service.vector_store = None
+        enhanced_rag_service.documents = []
+        enhanced_rag_service.processed_documents = {}
+
+        # Delete saved vector store
+        vector_store_path = Path("./faiss_index")
+        if vector_store_path.exists():
+            shutil.rmtree(vector_store_path)
+
+        return {"message": "All documents deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to delete documents: {str(e)}")

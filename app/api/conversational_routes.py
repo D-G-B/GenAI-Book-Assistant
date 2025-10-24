@@ -19,11 +19,13 @@ async def ask_conversational(
     request: ChatRequest,
     session_id: Optional[str] = Query(None, description="Conversation session ID"),
     user_id: Optional[str] = Query(None, description="User identifier"),
+    document_id: Optional[int] = Query(None, description="Filter search to specific document"),
     db: Session = Depends(get_db)
 ):
     """
     Ask a question with conversational memory.
     Follow-up questions will use context from previous messages in the same session.
+    Optionally filter to a specific document.
     """
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(
@@ -38,7 +40,8 @@ async def ask_conversational(
     result = await enhanced_rag_service.context_aware_rag.ask_with_context(
         question=request.question,
         session_id=session_id,
-        user_id=user_id
+        user_id=user_id,
+        document_id=document_id
     )
 
     if "error" in result:
