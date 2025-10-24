@@ -5,6 +5,8 @@ Production-ready RAG service using LangChain with document loaders and conversat
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 import time
+import os
+from pathlib import Path
 
 # LangChain imports
 from langchain_community.vectorstores import FAISS
@@ -29,6 +31,9 @@ class EnhancedRAGService:
     def __init__(self):
         print("🚀 Initializing Enhanced RAG Service...")
 
+        # Vector store persistence path
+        self.vector_store_path = Path("./faiss_index")
+
         # Core components
         self.embeddings = HuggingFaceEmbeddings(
             model_name='all-MiniLM-L6-v2',
@@ -50,6 +55,9 @@ class EnhancedRAGService:
         self.vector_store = None
         self.documents: List[Document] = []
 
+        # Try to load existing vector store
+        self._load_vector_store()
+
         # LLM
         self.llm = self._initialize_llm()
 
@@ -61,6 +69,36 @@ class EnhancedRAGService:
         self.processed_documents = {}
 
         print("✅ Enhanced RAG Service initialized with advanced document loaders")
+
+    def _load_vector_store(self):
+        """Load vector store from disk if it exists."""
+        if self.vector_store_path.exists():
+            try:
+                print(f"📂 Loading existing vector store from {self.vector_store_path}")
+                self.vector_store = FAISS.load_local(
+                    str(self.vector_store_path),
+                    self.embeddings,
+                    allow_dangerous_deserialization=True
+                )
+                # Get chunk count
+                try:
+                    chunk_count = self.vector_store.index.ntotal
+                    print(f"✅ Loaded vector store with {chunk_count} existing chunks")
+                except:
+                    print(f"✅ Loaded vector store")
+            except Exception as e:
+                print(f"⚠️ Could not load vector store: {e}")
+                print("   Will create new vector store")
+                self.vector_store = None
+
+    def _save_vector_store(self):
+        """Save vector store to disk."""
+        if self.vector_store is not None:
+            try:
+                self.vector_store.save_local(str(self.vector_store_path))
+                print(f"💾 Vector store saved to {self.vector_store_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to save vector store: {e}")
 
     def _initialize_llm(self):
         """Initialize the appropriate LLM based on available API keys."""
@@ -207,6 +245,9 @@ class EnhancedRAGService:
                         print(f"❌ Failed to add any chunks")
                         return False
 
+                # Save vector store to disk after processing
+                self._save_vector_store()
+
             except Exception as e:
                 print(f"❌ Error with vector store: {e}")
                 import traceback
@@ -231,8 +272,13 @@ class EnhancedRAGService:
             traceback.print_exc()
             return False
 
-    async def ask_question(self, question: str, db: Session) -> Dict[str, Any]:
-        """Answer a question using RAG."""
+    async def ask_question(
+        self,
+        question: str,
+        db: Session,
+        document_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Answer a question using RAG, optionally filtered to a specific document."""
         if not question.strip():
             return {"error": "Question cannot be empty"}
 
@@ -269,8 +315,17 @@ Answer:"""
                 input_variables=["context", "question"]
             )
 
-            # Create retrieval chain
-            retriever = self.vector_store.as_retriever(search_kwargs={"k": 4})
+            # Create retriever with optional document filter
+            search_kwargs = {"k": 4}
+
+            if document_id is not None:
+                # Filter to specific document
+                search_kwargs["filter"] = lambda metadata: metadata.get("document_id") == document_id
+                print(f"🔍 Searching only in document ID: {document_id}")
+            else:
+                print(f"🔍 Searching across all documents")
+
+            retriever = self.vector_store.as_retriever(search_kwargs=search_kwargs)
 
             qa_chain = RetrievalQA.from_chain_type(
                 llm=self.llm,
@@ -330,7 +385,8 @@ Answer:"""
             "vector_database": "FAISS",
             "llm_available": self.llm is not None,
             "conversational_available": self.context_aware_rag is not None,
-            "status": "ready" if chunk_count > 0 and self.llm else "not_ready"
+            "status": "ready" if chunk_count > 0 and self.llm else "not_ready",
+            "persistent_storage": self.vector_store_path.exists()
         }
 
 

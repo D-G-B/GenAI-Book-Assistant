@@ -2,8 +2,9 @@
 FastAPI router for chat/question-answering endpoints.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from typing import Optional
 from app.database import get_db
 from app.schemas.chat import ChatRequest, ChatResponse, ServiceStatus
 from app.services.enhanced_rag_service import enhanced_rag_service
@@ -11,13 +12,21 @@ from app.services.enhanced_rag_service import enhanced_rag_service
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 @router.post("/ask", response_model=ChatResponse)
-async def ask_question(request: ChatRequest, db: Session = Depends(get_db)):
+async def ask_question(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    document_id: Optional[int] = Query(None, description="Filter search to specific document")
+):
     """Ask a question about the uploaded documents."""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
     try:
-        result = await enhanced_rag_service.ask_question(request.question, db)
+        result = await enhanced_rag_service.ask_question(
+            request.question,
+            db,
+            document_id=document_id
+        )
 
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
