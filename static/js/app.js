@@ -8,7 +8,7 @@ function generateSessionId() {
 function setMode(mode) {
     currentMode = mode;
     document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
+    document.querySelector(`.mode-btn[onclick*="'${mode}'"]`).classList.add('active');
 
     if (mode === 'conversational') {
         sessionId = generateSessionId();
@@ -34,7 +34,6 @@ async function uploadDocument() {
         return;
     }
 
-    // Create FormData for file upload
     const formData = new FormData();
     formData.append('file', file);
     if (title) {
@@ -42,7 +41,6 @@ async function uploadDocument() {
     }
 
     try {
-        // Upload file using multipart/form-data
         const response = await fetch('/api/v1/documents/upload-file', {
             method: 'POST',
             body: formData
@@ -51,7 +49,6 @@ async function uploadDocument() {
         if (response.ok) {
             const doc = await response.json();
 
-            // Process the document
             const processResponse = await fetch(`/api/v1/documents/${doc.id}/process`, {
                 method: 'POST'
             });
@@ -89,7 +86,6 @@ async function loadDocuments() {
             return;
         }
 
-        // Update document list
         listDiv.innerHTML = docs.map(doc => `
             <div class="doc-item">
                 <div>
@@ -100,7 +96,6 @@ async function loadDocuments() {
             </div>
         `).join('');
 
-        // Update document filter dropdown
         filterSelect.innerHTML = '<option value="">Search in: All Documents</option>' +
             docs.map(doc => `<option value="${doc.id}">${doc.title}</option>`).join('');
 
@@ -138,7 +133,6 @@ async function askQuestion() {
     askBtn.innerHTML = '<span class="loading"></span>';
 
     try {
-        // Get selected document filter
         const filterSelect = document.getElementById('documentFilter');
         const documentId = filterSelect.value;
 
@@ -188,17 +182,29 @@ function addMessage(role, content, sources = []) {
     let html = `<p>${content}</p>`;
 
     if (sources && sources.length > 0) {
-        html += '<div class="sources"><strong>Sources:</strong>';
-        sources.forEach(source => {
-            html += `<div class="source-item">→ ${source.document_title} (chunk ${source.chunk_index})</div>`;
-        });
-        html += '</div>';
+        const sourceMap = sources.reduce((acc, source) => {
+            if (!acc[source.document_title]) {
+                acc[source.document_title] = [];
+            }
+            if (!acc[source.document_title].includes(source.chunk_index)) {
+                acc[source.document_title].push(source.chunk_index);
+            }
+            return acc;
+        }, {});
+
+        const sourceHtml = Object.keys(sourceMap).map(title => {
+            const chunks = sourceMap[title].sort((a, b) => a - b).join(', ');
+            return `${title} (chunks: ${chunks})`;
+        }).join(' | ');
+
+        html += `<div class="sources compact-sources"><strong>Sources:</strong> ${sourceHtml}</div>`;
     }
 
     messageDiv.innerHTML = html;
     messagesDiv.appendChild(messageDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
+
 
 async function loadStatus() {
     try {
@@ -207,24 +213,4 @@ async function loadStatus() {
 
         document.getElementById('status').innerHTML = `
             <div class="status-item">
-                <div class="status-value">${status.documents_loaded}</div>
-                <div class="status-label">Documents</div>
-            </div>
-            <div class="status-item">
-                <div class="status-value">${status.total_chunks}</div>
-                <div class="status-label">Chunks</div>
-            </div>
-            <div class="status-item">
-                <div class="status-value">${status.status}</div>
-                <div class="status-label">Status</div>
-            </div>
-        `;
-    } catch (error) {
-        console.error('Failed to load status:', error);
-    }
-}
-
-// Initialize on page load
-loadDocuments();
-loadStatus();
-setInterval(loadStatus, 30000);
+                <div class="status-value">${status.documents_

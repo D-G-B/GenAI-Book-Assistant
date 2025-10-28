@@ -6,7 +6,9 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 import time
 import os
+import json
 from pathlib import Path
+from datetime import datetime
 
 # LangChain imports
 from langchain_community.vectorstores import FAISS
@@ -33,6 +35,7 @@ class EnhancedRAGService:
 
         # Vector store persistence path
         self.vector_store_path = Path("./faiss_index")
+        self.manifest_path = Path("./faiss_index/manifest.json")
 
         # Core components
         self.embeddings = HuggingFaceEmbeddings(
@@ -70,6 +73,37 @@ class EnhancedRAGService:
 
         print("✅ Enhanced RAG Service initialized with advanced document loaders")
 
+    def _load_manifest(self) -> set:
+        """Load the set of processed document IDs from disk."""
+        if self.manifest_path.exists():
+            try:
+                with open(self.manifest_path, 'r') as f:
+                    data = json.load(f)
+                    processed_ids = set(data.get('processed_document_ids', []))
+                    print(f"📋 Loaded manifest: {len(processed_ids)} documents already processed")
+                    return processed_ids
+            except Exception as e:
+                print(f"⚠️ Could not load manifest: {e}")
+        return set()
+
+    def _save_manifest(self):
+        """Save the set of processed document IDs to disk."""
+        try:
+            # Ensure directory exists
+            self.vector_store_path.mkdir(exist_ok=True)
+
+            manifest_data = {
+                'processed_document_ids': list(self.processed_documents.keys()),
+                'last_updated': datetime.now().isoformat()
+            }
+
+            with open(self.manifest_path, 'w') as f:
+                json.dump(manifest_data, f, indent=2)
+
+            print(f"📋 Manifest saved: {len(self.processed_documents)} documents")
+        except Exception as e:
+            print(f"⚠️ Failed to save manifest: {e}")
+
     def _load_vector_store(self):
         """Load vector store from disk if it exists."""
         if self.vector_store_path.exists():
@@ -80,6 +114,14 @@ class EnhancedRAGService:
                     self.embeddings,
                     allow_dangerous_deserialization=True
                 )
+
+                # Load the manifest to know which documents are already processed
+                processed_ids = self._load_manifest()
+                for doc_id in processed_ids:
+                    self.processed_documents[doc_id] = {
+                        'loaded_from_disk': True
+                    }
+
                 # Get chunk count
                 try:
                     chunk_count = self.vector_store.index.ntotal
@@ -96,7 +138,8 @@ class EnhancedRAGService:
         if self.vector_store is not None:
             try:
                 self.vector_store.save_local(str(self.vector_store_path))
-                print(f"💾 Vector store saved to {self.vector_store_path}")
+                self._save_manifest()
+                print(f"💾 Vector store and manifest saved to {self.vector_store_path}")
             except Exception as e:
                 print(f"⚠️ Failed to save vector store: {e}")
 
@@ -132,6 +175,12 @@ class EnhancedRAGService:
 
     async def process_document(self, db: Session, document_id: int) -> bool:
         """Process a document with enhanced capabilities using advanced loaders."""
+
+        # Skip if already processed
+        if document_id in self.processed_documents:
+            print(f"⏭️  Document {document_id} already processed, skipping")
+            return True
+
         start_time = time.time()
 
         try:

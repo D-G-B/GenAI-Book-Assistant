@@ -256,12 +256,12 @@ input[type="file"] {
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid #2a2a2a;
-    font-size: 0.8em;
-    color: #666;
 }
 
-.source-item {
-    margin-top: 4px;
+.compact-sources {
+    font-size: 0.75em;
+    color: #888;
+    line-height: 1.4;
 }
 
 .input-area {
@@ -350,7 +350,6 @@ input[type="file"] {
     to { transform: rotate(360deg); }
 }
 
-/* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 8px;
 }
@@ -368,7 +367,6 @@ input[type="file"] {
     background: #444;
 }
 
-/* Mobile responsive */
 @media (max-width: 768px) {
     .layout {
         grid-template-columns: 1fr;

@@ -69,6 +69,6 @@ async def health_check():
     }
 
 if __name__ == "__main__":
-    # reminder cause i always forget :::::: source .venv/bin/activate :::::::
+    # reminder cause i always forget :::::: source .venv/bin/activate then -> uvicorn main:app --reload :::::::
     import uvicorn
     uvicorn.run(app, host="0.0git.0.0", port=8000, reload=True)
