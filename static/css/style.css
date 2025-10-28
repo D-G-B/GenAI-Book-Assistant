@@ -252,16 +252,14 @@ input[type="file"] {
     border: 1px solid #2a2a2a;
 }
 
-.sources {
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid #2a2a2a;
-}
-
+/* Compact sources styling */
 .compact-sources {
-    font-size: 0.75em;
-    color: #888;
-    line-height: 1.4;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2a2a;
+    font-size: 0.72em;
+    color: #777;
+    line-height: 1.3;
 }
 
 .input-area {
@@ -307,33 +305,34 @@ input[type="file"] {
     cursor: not-allowed;
 }
 
+/* Compact status section */
 .status {
-    margin-top: 20px;
+    margin-top: 12px;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
 }
 
 .status-item {
     background: #141414;
     border: 1px solid #2a2a2a;
-    border-radius: 8px;
-    padding: 16px;
+    border-radius: 6px;
+    padding: 10px;
     text-align: center;
 }
 
 .status-value {
-    font-size: 1.8em;
+    font-size: 1.3em;
     font-weight: 600;
     color: #fff;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 
 .status-label {
-    font-size: 0.8em;
+    font-size: 0.7em;
     color: #666;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
 }
 
 .loading {

@@ -182,29 +182,31 @@ function addMessage(role, content, sources = []) {
     let html = `<p>${content}</p>`;
 
     if (sources && sources.length > 0) {
+        // Group sources by document title
         const sourceMap = sources.reduce((acc, source) => {
             if (!acc[source.document_title]) {
                 acc[source.document_title] = [];
             }
+            // Avoid duplicate chunk indices
             if (!acc[source.document_title].includes(source.chunk_index)) {
                 acc[source.document_title].push(source.chunk_index);
             }
             return acc;
         }, {});
 
+        // Format as: "DocTitle (chunks: 1, 2, 3) | DocTitle2 (chunks: 4, 5)"
         const sourceHtml = Object.keys(sourceMap).map(title => {
             const chunks = sourceMap[title].sort((a, b) => a - b).join(', ');
-            return `${title} (chunks: ${chunks})`;
-        }).join(' | ');
+            return `${title} (${chunks})`;
+        }).join(' • ');
 
-        html += `<div class="sources compact-sources"><strong>Sources:</strong> ${sourceHtml}</div>`;
+        html += `<div class="compact-sources">${sourceHtml}</div>`;
     }
 
     messageDiv.innerHTML = html;
     messagesDiv.appendChild(messageDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
-
 
 async function loadStatus() {
     try {
@@ -213,4 +215,24 @@ async function loadStatus() {
 
         document.getElementById('status').innerHTML = `
             <div class="status-item">
-                <div class="status-value">${status.documents_
+                <div class="status-value">${status.documents_loaded}</div>
+                <div class="status-label">Docs</div>
+            </div>
+            <div class="status-item">
+                <div class="status-value">${status.total_chunks}</div>
+                <div class="status-label">Chunks</div>
+            </div>
+            <div class="status-item">
+                <div class="status-value">${status.status}</div>
+                <div class="status-label">Status</div>
+            </div>
+        `;
+    } catch (error) {
+        console.error('Failed to load status:', error);
+    }
+}
+
+// Initialize on page load
+loadDocuments();
+loadStatus();
+setInterval(loadStatus, 30000);
