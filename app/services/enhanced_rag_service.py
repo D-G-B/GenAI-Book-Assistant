@@ -58,7 +58,10 @@ class EnhancedRAGService:
         self.vector_store = None
         self.documents: List[Document] = []
 
-        # Try to load existing vector store
+        # Tracking - MUST initialize BEFORE loading vector store
+        self.processed_documents = {}
+
+        # Try to load existing vector store (will populate processed_documents)
         self._load_vector_store()
 
         # LLM
@@ -67,9 +70,6 @@ class EnhancedRAGService:
         # Conversational features
         self.context_aware_rag = None
         self._setup_conversational_rag()
-
-        # Tracking
-        self.processed_documents = {}
 
         print("✅ Enhanced RAG Service initialized with advanced document loaders")
 
@@ -294,16 +294,13 @@ class EnhancedRAGService:
                         print(f"❌ Failed to add any chunks")
                         return False
 
-                # Save vector store to disk after processing
-                self._save_vector_store()
-
             except Exception as e:
                 print(f"❌ Error with vector store: {e}")
                 import traceback
                 traceback.print_exc()
                 return False
 
-            # Track processing
+            # Track processing - MUST do this BEFORE saving manifest
             processing_time = time.time() - start_time
             self.processed_documents[document_id] = {
                 'title': db_doc.title,
@@ -311,6 +308,9 @@ class EnhancedRAGService:
                 'chunk_count': len(final_documents),
                 'processing_time': processing_time
             }
+
+            # Save vector store to disk after processing (includes manifest)
+            self._save_vector_store()
 
             print(f"✅ Processed '{db_doc.title}' in {processing_time:.2f}s - {len(final_documents)} chunks")
             return True
