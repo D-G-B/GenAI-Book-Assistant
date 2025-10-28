@@ -49,7 +49,7 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# API routes
+# API routesgem
 app.include_router(documents_routes.router, prefix="/api/v1")
 app.include_router(chat_routes.router, prefix="/api/v1")
 app.include_router(conversational_routes.router, prefix="/api/v1")
@@ -69,5 +69,6 @@ async def health_check():
     }
 
 if __name__ == "__main__":
+    # reminder cause i always forget :::::: source .venv/bin/activate :::::::
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0git.0.0", port=8000, reload=True)
