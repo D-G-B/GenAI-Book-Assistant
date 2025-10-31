@@ -3,6 +3,8 @@ Production-ready RAG service using LangChain with document loaders and conversat
 """
 
 from typing import List, Dict, Any, Optional
+
+from langchain_community.chat_models import ChatAnthropic
 from sqlalchemy.orm import Session
 import time
 import os
@@ -145,19 +147,27 @@ class EnhancedRAGService:
 
     def _initialize_llm(self):
         """Initialize the appropriate LLM based on available API keys."""
-        if settings.GOOGLE_API_KEY and settings.DEFAULT_GEMINI_MODEL:
-            print(f"✅ Using Google Gemini: {settings.DEFAULT_GEMINI_MODEL}")
-            return ChatGoogleGenerativeAI(
-                model=settings.DEFAULT_GEMINI_MODEL,
-                google_api_key=settings.GOOGLE_API_KEY,
-                temperature=0.3,
-                max_tokens=1000
-            )
-        elif settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
+        if settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
             print(f"✅ Using OpenAI: {settings.DEFAULT_OPENAI_MODEL}")
             return ChatOpenAI(
                 model_name=settings.DEFAULT_OPENAI_MODEL,
                 openai_api_key=settings.OPENAI_API_KEY,
+                temperature=0.3,
+                max_tokens=1000
+            )
+        elif settings.ANTHROPIC_API_KEY and settings.DEFAULT_ANTHROPIC_MODEL:
+            print(f"✅ Using Claude: {settings.DEFAULT_CLAUDE_MODEL}")
+            return ChatAnthropic(
+                model=settings.DEFAULT_CLAUDE_MODEL,
+                anthropic_api_key=settings.ANTHROPIC_API_KEY,
+                temperature=0.3,
+                max_tokens=1000
+            )
+        elif settings.GOOGLE_API_KEY and settings.DEFAULT_GEMINI_MODEL:
+            print(f"✅ Using Google Gemini: {settings.DEFAULT_GEMINI_MODEL}")
+            return ChatGoogleGenerativeAI(
+                model=settings.DEFAULT_GEMINI_MODEL,
+                google_api_key=settings.GOOGLE_API_KEY,
                 temperature=0.3,
                 max_tokens=1000
             )
