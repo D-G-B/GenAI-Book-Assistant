@@ -7,7 +7,6 @@ from typing import List, Dict, Any, Optional
 from langchain_community.chat_models import ChatAnthropic
 from sqlalchemy.orm import Session
 import time
-import os
 import json
 from pathlib import Path
 from datetime import datetime
@@ -25,7 +24,7 @@ from langchain.prompts import PromptTemplate
 from app.database import LoreDocument
 from app.config import settings
 
-# Import the advanced document processor
+# document processor
 from app.services.advanced_document_loaders import document_processor as advanced_doc_processor
 
 
@@ -45,7 +44,7 @@ class EnhancedRAGService:
             model_kwargs={'device': 'cpu'}
         )
 
-        # Text splitter with intelligent chunking
+        # Text splitter with intelligent? chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -73,7 +72,7 @@ class EnhancedRAGService:
         self.context_aware_rag = None
         self._setup_conversational_rag()
 
-        print("✅ Enhanced RAG Service initialized with advanced document loaders")
+        print("✅ RAG Service initialized with advanced document loaders")
 
     def _load_manifest(self) -> set:
         """Load the set of processed document IDs from disk."""

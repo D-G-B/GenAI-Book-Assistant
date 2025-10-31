@@ -49,7 +49,7 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# API routesgem
+# API routes
 app.include_router(documents_routes.router, prefix="/api/v1")
 app.include_router(chat_routes.router, prefix="/api/v1")
 app.include_router(conversational_routes.router, prefix="/api/v1")
