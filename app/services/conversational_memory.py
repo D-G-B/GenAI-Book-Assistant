@@ -1,6 +1,6 @@
 """
-Conversational memory system for context-aware conversations - REFACTORED
-Works with the refactored vector store manager.
+Conversational memory system for context-aware conversations
+
 """
 
 from typing import List, Dict, Any, Optional
@@ -112,7 +112,7 @@ Standalone Question:"""
 
 
 class ContextAwareRAG:
-    """RAG system with conversational memory - REFACTORED."""
+    """RAG system with conversational memory."""
 
     def __init__(self, base_rag_service):
         self.base_rag = base_rag_service

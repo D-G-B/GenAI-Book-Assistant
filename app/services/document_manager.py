@@ -93,7 +93,7 @@ class DocumentManager:
         """
         Add and process a document.
 
-        This is the atomic operation that:
+        This is the operation that:
         1. Validates document exists in database
         2. Processes and chunks the document
         3. Adds chunks to vector store
@@ -246,7 +246,7 @@ class DocumentManager:
         """
         Delete a document (soft delete).
 
-        This is the atomic operation that:
+        This is the operation that:
         1. Removes from database
         2. Soft-deletes from vector store
         3. Updates manifest

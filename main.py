@@ -1,6 +1,5 @@
 """
-Production FastAPI application with enhanced RAG and conversational memory - REFACTORED
-Uses the new Document Manager architecture.
+FastAPI application with RAG and conversational memory
 """
 
 from contextlib import asynccontextmanager
