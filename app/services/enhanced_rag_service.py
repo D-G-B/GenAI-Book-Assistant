@@ -29,7 +29,7 @@ from app.services.advanced_document_loaders import document_processor as advance
 
 
 class EnhancedRAGService:
-    """Production RAG service with LangChain, document loaders, and conversational memory."""
+    """RAG service with LangChain, document loaders, and conversational memory."""
 
     def __init__(self):
         print("🚀 Initializing Enhanced RAG Service...")
