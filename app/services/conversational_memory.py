@@ -1,5 +1,6 @@
 """
-Conversational memory system for context-aware conversations.
+Conversational memory system for context-aware conversations - REFACTORED
+Works with the refactored vector store manager.
 """
 
 from typing import List, Dict, Any, Optional
@@ -111,7 +112,7 @@ Standalone Question:"""
 
 
 class ContextAwareRAG:
-    """RAG system with conversational memory."""
+    """RAG system with conversational memory - REFACTORED."""
 
     def __init__(self, base_rag_service):
         self.base_rag = base_rag_service
@@ -133,7 +134,7 @@ class ContextAwareRAG:
         if not self.base_rag.llm:
             return {"error": "No language model configured"}
 
-        if not self.base_rag.vector_store:
+        if not self.base_rag.vector_store_manager.vector_store:
             return {"error": "No documents available"}
 
         try:
@@ -145,16 +146,18 @@ class ContextAwareRAG:
 
             # Create or get conversational chain for this session/filter combination
             if chain_key not in self.active_chains:
-                search_kwargs = {"k": 4}
+                # Use vector store manager's get_retriever method (handles filtering)
+                retriever = self.base_rag.vector_store_manager.get_retriever(
+                    k=4,
+                    document_id=document_id
+                )
+
+                if retriever is None:
+                    return {"error": "Vector store not available"}
 
                 if document_id is not None:
-                    # Filter to specific document
-                    search_kwargs["filter"] = lambda metadata: metadata.get("document_id") == document_id
                     print(f"💬 Conversational search in document ID: {document_id}")
 
-                retriever = self.base_rag.vector_store.as_retriever(
-                    search_kwargs=search_kwargs
-                )
                 chain = self.memory_manager.create_conversational_chain(
                     retriever=retriever,
                     llm=self.base_rag.llm

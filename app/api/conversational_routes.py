@@ -1,5 +1,6 @@
 """
-API routes for conversational chat with memory.
+API routes for conversational chat with memory - REFACTORED
+Works with the refactored enhanced_rag_service.
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -9,7 +10,6 @@ from uuid import uuid4
 
 from app.database import get_db
 from app.schemas.chat import ChatRequest
-from app.services.enhanced_rag_service import enhanced_rag_service
 
 router = APIRouter(prefix="/conversation", tags=["Conversational Chat"])
 
@@ -27,6 +27,8 @@ async def ask_conversational(
     Follow-up questions will use context from previous messages in the same session.
     Optionally filter to a specific document.
     """
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(
             status_code=400,
@@ -53,6 +55,8 @@ async def ask_conversational(
 @router.get("/history/{session_id}")
 async def get_history(session_id: str):
     """Get conversation history for a specific session."""
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(status_code=400, detail="Conversational features not available")
 
@@ -68,6 +72,8 @@ async def get_history(session_id: str):
 @router.delete("/session/{session_id}")
 async def clear_session(session_id: str):
     """Clear a conversation session."""
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(status_code=400, detail="Conversational features not available")
 
@@ -82,6 +88,8 @@ async def clear_session(session_id: str):
 @router.get("/sessions")
 async def list_sessions():
     """List all active conversation sessions."""
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(status_code=400, detail="Conversational features not available")
 

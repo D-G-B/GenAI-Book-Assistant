@@ -1,30 +1,44 @@
 """
-FastAPI router for document management endpoints with full file upload support.
+FastAPI router for document management endpoints - REFACTORED
+Uses DocumentManager for all operations to ensure synchronization.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
-from app.database import get_db, LoreDocument
+from app.database import get_db
 from app.schemas.documents import DocumentCreate, DocumentResponse
-from typing import Optional
+from typing import Optional, List
 import tempfile
-import os
-import shutil
-from pathlib import Path
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
-@router.get("/list", response_model=list[DocumentResponse])
-async def list_documents(db: Session = Depends(get_db)):
-    """Return a list of all uploaded documents."""
-    docs = db.query(LoreDocument).all()
-    return docs
+@router.get("/list")
+async def list_documents(
+    include_deleted: bool = Query(False, description="Include soft-deleted documents"),
+    db: Session = Depends(get_db)
+):
+    """
+    Return a list of all uploaded documents with their status.
+
+    Args:
+        include_deleted: If True, includes soft-deleted documents with status field
+    """
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
+    documents = enhanced_rag_service.document_manager.list_all_documents(
+        db,
+        include_deleted=include_deleted
+    )
+
+    return documents
 
 
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(document: DocumentCreate, db: Session = Depends(get_db)):
     """Upload a new document for the RAG assistant (JSON format - for API use)."""
+    from app.database import LoreDocument
+
     new_doc = LoreDocument(**document.model_dump())
 
     try:
@@ -43,7 +57,12 @@ async def upload_file(
     title: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Upload a document file (supports PDF, TXT, MD, DOCX, etc.)."""
+    """
+    Upload a document file (supports PDF, TXT, MD, DOCX, etc.).
+    Automatically processes the document after upload.
+    """
+    from app.database import LoreDocument
+    from app.services.enhanced_rag_service import enhanced_rag_service
 
     # Use filename as title if not provided
     if not title:
@@ -91,6 +110,7 @@ async def upload_file(
                 content = f"[PDF file: {file.filename} - extraction failed]"
             finally:
                 # Clean up temp file
+                import os
                 if os.path.exists(temp_path):
                     os.unlink(temp_path)
 
@@ -117,6 +137,7 @@ async def upload_file(
                 print(f"❌ Error extracting Word document: {e}")
                 content = f"[Word document: {file.filename} - extraction failed]"
             finally:
+                import os
                 if os.path.exists(temp_path):
                     os.unlink(temp_path)
         else:
@@ -126,7 +147,7 @@ async def upload_file(
             except:
                 content = f"[Unsupported file type: {file.filename}]"
 
-        # Create document record
+        # Create document record in database
         new_doc = LoreDocument(
             title=title,
             filename=file.filename,
@@ -138,9 +159,23 @@ async def upload_file(
         db.commit()
         db.refresh(new_doc)
 
-        print(f"✅ Document '{title}' uploaded successfully")
+        print(f"✅ Document '{title}' saved to database (ID: {new_doc.id})")
+
+        # Process document through document manager
+        success = await enhanced_rag_service.document_manager.add_document(db, new_doc.id)
+
+        if not success:
+            # Document was added to DB but processing failed
+            print(f"⚠️ Document saved but processing failed")
+            raise HTTPException(
+                status_code=400,
+                detail="Document uploaded but processing failed"
+            )
+
         return new_doc
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print(f"❌ Failed to upload file: {e}")
@@ -149,55 +184,123 @@ async def upload_file(
         raise HTTPException(status_code=400, detail=f"Failed to upload file: {str(e)}")
 
 
-@router.delete("/{document_id}")
-async def delete_document(document_id: int, db: Session = Depends(get_db)):
-    """Delete a document from the database."""
-    doc_to_delete = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
-
-    if not doc_to_delete:
-        raise HTTPException(status_code=404, detail="Document not found")
+@router.delete("/all")
+async def delete_all_documents(db: Session = Depends(get_db)):
+    """
+    Delete all documents.
+    Clears database, vector store, and manifest.
+    """
+    from app.services.enhanced_rag_service import enhanced_rag_service
 
     try:
-        db.delete(doc_to_delete)
-        db.commit()
-        return {"message": f"Document '{doc_to_delete.title}' successfully deleted."}
+        success = enhanced_rag_service.document_manager.delete_all_documents(db)
+
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to delete all documents")
+
+        return {"message": "All documents deleted successfully"}
+
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"Failed to delete document: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to delete documents: {str(e)}")
+
+
+@router.delete("/{document_id}")
+async def delete_document(document_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a document (soft delete).
+    Removes from database and marks as deleted in vector store.
+    """
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
+    success = enhanced_rag_service.document_manager.delete_document(db, document_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Document not found or deletion failed")
+
+    return {"message": f"Document {document_id} successfully deleted"}
 
 
 @router.post("/{document_id}/process")
 async def process_document(document_id: int, db: Session = Depends(get_db)):
-    """Process uploaded document for RAG (chunking and embedding)."""
+    """
+    Process an uploaded document for RAG (chunking and embedding).
+    Normally called automatically after upload.
+    """
     from app.services.enhanced_rag_service import enhanced_rag_service
 
-    success = await enhanced_rag_service.process_document(db, document_id)
+    success = await enhanced_rag_service.document_manager.add_document(db, document_id)
+
     if not success:
         raise HTTPException(status_code=400, detail="Failed to process document")
 
     return {"message": "Document processed successfully"}
 
 
-@router.delete("/all")
-async def delete_all_documents(db: Session = Depends(get_db)):
-    """Delete all documents and reset vector store."""
+@router.post("/rebuild-index")
+async def rebuild_index(db: Session = Depends(get_db)):
+    """
+    Rebuild the vector store index from scratch.
+
+    This operation:
+    - Physically removes soft-deleted documents from the index
+    - Optimizes the index for better performance
+    - Reprocesses all active documents
+
+    Use this periodically or when deleted documents exceed 20% of the index.
+    """
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
     try:
-        # Delete all documents from database
-        db.query(LoreDocument).delete()
-        db.commit()
+        print("🔄 Starting index rebuild (this may take a while)...")
 
-        # Reset vector store
-        from app.services.enhanced_rag_service import enhanced_rag_service
-        enhanced_rag_service.vector_store = None
-        enhanced_rag_service.documents = []
-        enhanced_rag_service.processed_documents = {}
+        success = await enhanced_rag_service.document_manager.rebuild_index(db)
 
-        # Delete saved vector store
-        vector_store_path = Path("./faiss_index")
-        if vector_store_path.exists():
-            shutil.rmtree(vector_store_path)
+        if not success:
+            raise HTTPException(status_code=400, detail="Index rebuild failed")
 
-        return {"message": "All documents deleted successfully"}
+        stats = enhanced_rag_service.document_manager.get_stats()
+
+        return {
+            "message": "Index rebuilt successfully",
+            "stats": stats
+        }
+
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"Failed to delete documents: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"Failed to rebuild index: {str(e)}")
+
+
+@router.get("/{document_id}/status")
+async def get_document_status(document_id: int, db: Session = Depends(get_db)):
+    """Get the status of a document across all systems."""
+    from app.services.enhanced_rag_service import enhanced_rag_service
+    from app.database import LoreDocument
+
+    # Check if document exists in database
+    db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
+
+    if not db_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    status = enhanced_rag_service.document_manager.get_document_status(document_id)
+
+    return {
+        "id": document_id,
+        "title": db_doc.title,
+        "filename": db_doc.filename,
+        "in_database": True,
+        "processed": status['processed'],
+        "soft_deleted": status['soft_deleted'],
+        "metadata": status['metadata']
+    }
+
+
+@router.get("/stats/overview")
+async def get_stats(db: Session = Depends(get_db)):
+    """Get overall statistics about document processing."""
+    from app.services.enhanced_rag_service import enhanced_rag_service
+
+    stats = enhanced_rag_service.document_manager.get_stats()
+
+    return stats
