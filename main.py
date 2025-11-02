@@ -1,5 +1,6 @@
 """
-Production FastAPI application with enhanced RAG and conversational memory
+Production FastAPI application with enhanced RAG and conversational memory - REFACTORED
+Uses the new Document Manager architecture.
 """
 
 from contextlib import asynccontextmanager
@@ -17,21 +18,30 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     settings.validate_api_keys()
 
-    # Initialize enhanced service
+    # Initialize enhanced service (this creates document_manager internally)
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     print("✅ Enhanced RAG service ready")
 
-    # Process existing documents
+    # Process any unprocessed documents
     db = SessionLocal()
     try:
         docs = db.query(LoreDocument).all()
         if docs:
-            print(f"\n📚 Found {len(docs)} existing documents")
+            print(f"\n📚 Found {len(docs)} documents in database")
+
+            # The document manager will automatically skip already-processed documents
             for doc in docs:
-                print(f"   Processing: {doc.title}")
-                await enhanced_rag_service.process_document(db, doc.id)
-            print("✅ All documents processed\n")
+                # Check if already processed
+                if enhanced_rag_service.document_manager.is_processed(doc.id):
+                    print(f"   ✓ {doc.title} (already processed)")
+                else:
+                    print(f"   Processing: {doc.title}")
+                    await enhanced_rag_service.document_manager.add_document(db, doc.id)
+
+            print("✅ Document processing complete\n")
+        else:
+            print("📝 No documents found in database\n")
     finally:
         db.close()
 
@@ -39,9 +49,9 @@ async def lifespan(app: FastAPI):
     print("👋 Application shutdown")
 
 app = FastAPI(
-    title="Fantasy RAG Assistant",
+    title="RAG Document Assistant",
     description="RAG-powered chat assistant with conversational memory",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -65,10 +75,9 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": "1.0.0"
+        "version": "2.0.0"
     }
 
 if __name__ == "__main__":
-    # reminder cause i always forget :::::: source .venv/bin/activate then -> uvicorn main:app --reload :::::::
     import uvicorn
-    uvicorn.run(app, host="0.0git.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
