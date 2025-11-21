@@ -105,7 +105,7 @@ Standalone Question:"""
             memory=memory,
             condense_question_prompt=condense_question_prompt,
             return_source_documents=True,
-            verbose=False
+            verbose=True
         )
 
         return chain
