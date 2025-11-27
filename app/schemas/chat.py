@@ -17,6 +17,8 @@ class ChatResponse(BaseModel):
     confidence: float
     chunks_used: int
     error: Optional[str] = None
+    spoiler_filter_active: bool = False
+    max_chapter: Optional[int] = None
 
 class ChatHistory(BaseModel):
     id: int
