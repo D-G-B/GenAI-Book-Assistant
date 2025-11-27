@@ -1,6 +1,6 @@
 """
 API routes for conversational chat with memory.
-Now supports chapter-based spoiler filtering.
+Now supports chapter-based spoiler filtering and strict response validation.
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -9,19 +9,19 @@ from typing import Optional
 from uuid import uuid4
 
 from app.database import get_db
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ChatRequest, ConversationResponse
 
 router = APIRouter(prefix="/conversation", tags=["Conversational Chat"])
 
 
-@router.post("/ask")
+@router.post("/ask", response_model=ConversationResponse)
 async def ask_conversational(
-    request: ChatRequest,
-    session_id: Optional[str] = Query(None, description="Conversation session ID"),
-    user_id: Optional[str] = Query(None, description="User identifier"),
-    document_id: Optional[int] = Query(None, description="Filter search to specific document"),
-    max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter"),
-    db: Session = Depends(get_db)
+        request: ChatRequest,
+        session_id: Optional[str] = Query(None, description="Conversation session ID"),
+        user_id: Optional[str] = Query(None, description="User identifier"),
+        document_id: Optional[int] = Query(None, description="Filter search to specific document"),
+        max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter"),
+        db: Session = Depends(get_db)
 ):
     """
     Ask a question with conversational memory.
@@ -54,6 +54,7 @@ async def ask_conversational(
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
 
+    # FastAPI automatically validates this dict against ConversationResponse
     return result
 
 
