@@ -26,18 +26,25 @@ function setMode(mode) {
 
 function toggleSpoilerProtection() {
     const toggle = document.getElementById('spoilerToggle');
+    const slider = document.getElementById('chapterSlider');
     const sliderContainer = document.getElementById('sliderContainer');
     const statusDisplay = document.getElementById('spoilerStatus');
 
     spoilerProtectionEnabled = toggle.checked;
 
     if (spoilerProtectionEnabled) {
-        sliderContainer.style.display = 'block';
-        maxChapter = parseInt(document.getElementById('chapterSlider').value);
+        // Enable
+        slider.disabled = false;
+        sliderContainer.style.opacity = '1.0';
+
+        maxChapter = parseInt(slider.value);
         statusDisplay.textContent = `ON - Up to Ch. ${maxChapter}`;
         statusDisplay.classList.add('active');
     } else {
-        sliderContainer.style.display = 'none';
+        // Disable
+        slider.disabled = true;
+        sliderContainer.style.opacity = '0.5'; // Visual feedback
+
         maxChapter = null;
         statusDisplay.textContent = 'OFF - Full Book';
         statusDisplay.classList.remove('active');
@@ -290,3 +297,4 @@ async function loadStatus() {
 loadDocuments();
 loadStatus();
 setInterval(loadStatus, 30000);
+toggleSpoilerProtection();

@@ -179,7 +179,7 @@ class DocumentManager:
             return False
 
     async def _process_and_chunk(self, db_doc: LoreDocument) -> List[Document]:
-        """Process document content and create chunks with chapter metadata."""
+        """Process document content and detect structure automatically."""
 
         base_metadata = {
             'document_id': db_doc.id,
@@ -189,20 +189,45 @@ class DocumentManager:
 
         content = db_doc.content
 
-        # For EPUBs, we have chapter markers like "=== Chapter Title ==="
-        # Parse these to extract chapter numbers and structure
-        if db_doc.source_type == 'epub':
-            return self._chunk_epub_content(content, base_metadata)
+        # 1. Define Chapter Patterns
+        # A list of regex patterns to detect different book structures
+        patterns = [
+            # Pattern A: Your Test format (=== Chapter 1 ===)
+            r'===\s*(.+?)\s*===',
 
-        # For other formats, use standard processing
+            # Pattern B: Standard Books (Chapter 1: The Beginning)
+            # (?im) = case-insensitive, multiline
+            r'((?im)^chapter\s+\d+.*?$)',
+            r'((?im)^chapter\s+[a-z]+.*?$)',
+
+            # Pattern C: Parts (Part I)
+            r'((?im)^part\s+\d+.*?$)'
+        ]
+
+        # 2. Detect which pattern fits this document
+        selected_pattern = None
+
+        # If it's explicitly an EPUB, default to Pattern A (or whatever your epub loader produces)
+        # But for text/pdf, scan the content
+        for pattern in patterns:
+            # If we find at least 3 matches, assume this is the correct structure
+            matches = re.findall(pattern, content)
+            if len(matches) >= 3:
+                print(f"   📖 Detected structure: {len(matches)} chapters using pattern '{pattern}'")
+                selected_pattern = pattern
+                break
+
+        # 3. Use structured chunking if a pattern was found
+        if selected_pattern:
+            return self._chunk_structured_content(content, base_metadata, selected_pattern)
+
+        # 4. Fallback to standard processing (no chapters)
+        print("   ⚠️ No chapter structure detected, using standard chunking")
         try:
             initial_docs = self.document_processor.process_content(
-                content,
-                db_doc.filename,
-                base_metadata
+                content, db_doc.filename, base_metadata
             )
         except Exception as e:
-            print(f"⚠️ Error with document processor: {e}")
             if len(content.strip()) > 20:
                 initial_docs = [Document(page_content=content, metadata=base_metadata)]
             else:
@@ -211,75 +236,54 @@ class DocumentManager:
         if not initial_docs:
             return []
 
-        # Standard chunking (no chapter awareness)
         return self._chunk_documents(initial_docs)
 
-    def _chunk_epub_content(self, content: str, base_metadata: Dict[str, Any]) -> List[Document]:
+    def _chunk_structured_content(self, content: str, base_metadata: Dict[str, Any], chapter_pattern: str) -> List[
+        Document]:
         """
-        Chunk EPUB content with chapter number extraction.
-
-        Looks for markers like:
-        - "=== Chapter 1 ===" or "=== Chapter 01 ==="
-        - "=== Appendix I: The Ecology of Dune ==="
-        - "=== Terminology of the Imperium ==="
+        Universal chunker for any document with detectable chapters.
+        Replaces the old _chunk_epub_content method.
         """
         final_chunks = []
 
-        # Pattern to match chapter markers
-        # Matches: === Any Title ===
-        chapter_pattern = r'===\s*(.+?)\s*==='
-
-        # Split content by chapter markers
+        # Split content using the detected pattern
         parts = re.split(chapter_pattern, content)
 
-        # parts = [before_first_marker, title1, content1, title2, content2, ...]
-        # If content starts with a marker, parts[0] will be empty
-
         current_chapter_num = 0
-
-        # Process in pairs: (title, content)
         i = 0
 
-        # Handle any content before first marker
+        # Handle frontmatter (content before first chapter)
         if parts and parts[0].strip():
-            # Content before any chapter marker - treat as intro/frontmatter
-            intro_content = parts[0].strip()
-            if len(intro_content) > 50:
-                intro_chunks = self._create_chunks(
-                    intro_content,
-                    base_metadata,
-                    chapter_number=0,
-                    chapter_title="Frontmatter",
-                    is_reference=False
-                )
-                final_chunks.extend(intro_chunks)
+            intro_chunks = self._create_chunks(
+                parts[0].strip(), base_metadata,
+                chapter_number=0, chapter_title="Frontmatter", is_reference=False
+            )
+            final_chunks.extend(intro_chunks)
             i = 1
         else:
             i = 1
 
-        # Process chapter pairs
+        # Process pairs: (Header, Content)
+        # re.split includes the capturing groups (the headers) in the result list
         while i < len(parts) - 1:
             chapter_title = parts[i].strip()
             chapter_content = parts[i + 1].strip() if i + 1 < len(parts) else ""
 
+            # Skip empty sections
             if not chapter_content or len(chapter_content) < 50:
                 i += 2
                 continue
 
-            # Extract chapter number from title
+            # Extract number
             chapter_num = self._extract_chapter_number(chapter_title)
 
             if chapter_num is not None:
                 current_chapter_num = chapter_num
             else:
-                # No number found - could be appendix or other section
-                # Keep incrementing for ordering purposes
                 current_chapter_num += 1
 
-            # Detect if this is reference material
             is_reference = self._is_reference_section(chapter_title)
 
-            # Create chunks for this chapter
             chapter_chunks = self._create_chunks(
                 chapter_content,
                 base_metadata,
@@ -306,10 +310,10 @@ class DocumentManager:
 
         # Try numeric patterns first
         patterns = [
-            r'chapter\s+(\d+)',      # Chapter 1, Chapter 01
-            r'ch\.?\s*(\d+)',        # Ch. 5, Ch 5
-            r'^(\d+)\.',             # 1. Title
-            r'^(\d+)\s*[-–—]',       # 1 - Title
+            r'chapter\s+(\d+)',  # Chapter 1, Chapter 01
+            r'ch\.?\s*(\d+)',  # Ch. 5, Ch 5
+            r'^(\d+)\.',  # 1. Title
+            r'^(\d+)\s*[-–—]',  # 1 - Title
         ]
 
         for pattern in patterns:
@@ -347,12 +351,12 @@ class DocumentManager:
         return any(marker in title_lower for marker in reference_markers)
 
     def _create_chunks(
-        self,
-        content: str,
-        base_metadata: Dict[str, Any],
-        chapter_number: Optional[int],
-        chapter_title: str,
-        is_reference: bool
+            self,
+            content: str,
+            base_metadata: Dict[str, Any],
+            chapter_number: Optional[int],
+            chapter_title: str,
+            is_reference: bool
     ) -> List[Document]:
         """Create chunks from content with proper metadata."""
 

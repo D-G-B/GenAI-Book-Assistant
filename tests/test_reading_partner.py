@@ -267,13 +267,16 @@ def test_spoiler_filter(doc_id):
     """Test spoiler filtering functionality."""
     print_test("Spoiler Filter")
 
+    # Track overall success of this test function
+    success = True
+
     # Duke Leto's death is in Chapter 5
     # With max_chapter=3, we should NOT find info about his death
     # With max_chapter=5+, we should find it
 
     question = "What happened to Duke Leto?"
 
-    # Test 1: With spoiler filter at chapter 3 (before the attack)
+    # --- Test 1: Spoiler Protection (Chapter 3) ---
     print_info("Testing with max_chapter=3 (before Duke's death)...")
     try:
         response = requests.post(
@@ -295,15 +298,18 @@ def test_spoiler_filter(doc_id):
             else:
                 print_error("Chapter 3 filter: Leaked spoiler about Duke's fate!")
                 print(f"   Answer: {answer[:150]}...")
+                success = False  # Mark test as failed
         else:
             print_error(f"Request failed: {response.status_code}")
+            success = False
 
     except Exception as e:
         print_error(f"Error: {e}")
+        success = False
 
     time.sleep(0.5)
 
-    # Test 2: With spoiler filter at chapter 5 (after the attack)
+    # --- Test 2: Accessing Content (Chapter 5) ---
     print_info("Testing with max_chapter=5 (after Duke's death)...")
     try:
         response = requests.post(
@@ -324,14 +330,16 @@ def test_spoiler_filter(doc_id):
                 print_success("Chapter 5 filter: Found info about Duke's fate (correct)")
             else:
                 print_info("Chapter 5 filter: Didn't find death info (may be in later chunk)")
-                print(f"   Answer: {answer[:150]}...")
+                # We don't necessarily fail here, as RAG can be fuzzy, but good to know
         else:
             print_error(f"Request failed: {response.status_code}")
+            success = False
 
     except Exception as e:
         print_error(f"Error: {e}")
+        success = False
 
-    return True
+    return success
 
 
 def test_reference_material(doc_id):
