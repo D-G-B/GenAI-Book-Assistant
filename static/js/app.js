@@ -274,22 +274,28 @@ async function loadStatus() {
         const response = await fetch('/api/v1/chat/status');
         const status = await response.json();
 
-        document.getElementById('status').innerHTML = `
-            <div class="status-item">
-                <div class="status-value">${status.documents_loaded}</div>
-                <div class="status-label">Docs</div>
-            </div>
-            <div class="status-item">
-                <div class="status-value">${status.total_chunks}</div>
-                <div class="status-label">Chunks</div>
-            </div>
-            <div class="status-item">
-                <div class="status-value">${status.status}</div>
-                <div class="status-label">Status</div>
-            </div>
-        `;
+        // Update Header Status Badge
+        const statusBadge = document.getElementById('headerStatus');
+        if (status.status === 'ready') {
+            statusBadge.textContent = '● System Ready';
+            statusBadge.className = 'status-badge ready';
+        } else {
+            statusBadge.textContent = '○ Not Ready';
+            statusBadge.className = 'status-badge not_ready';
+        }
+
+        // Update Sidebar Stats
+        document.getElementById('docCount').textContent = status.documents_loaded;
+        document.getElementById('chunkCount').textContent = status.total_chunks;
+
     } catch (error) {
         console.error('Failed to load status:', error);
+        // Set error state if fetch fails
+        const statusBadge = document.getElementById('headerStatus');
+        if(statusBadge) {
+            statusBadge.textContent = '! Connection Lost';
+            statusBadge.className = 'status-badge not_ready';
+        }
     }
 }
 
