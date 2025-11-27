@@ -307,8 +307,8 @@ class DocumentManager:
             # --- SMART NUMBERING LOGIC ---
             title_lower = chapter_title.lower()
 
-            # Rule 1: Epilogues are spoilers. Force them to Chapter 9999.
-            if 'epilogue' in title_lower:
+            # Rule 1: Epilogues/Afterwords are spoilers. Force them to Chapter 9999.
+            if 'epilogue' in title_lower or 'afterword' in title_lower:
                 current_chapter_num = 9999
 
             # Rule 2: Prologues/Intros are safe. Force them to Chapter 0.
@@ -402,7 +402,7 @@ class DocumentManager:
         reference_markers = [
             'appendix', 'glossary', 'terminology', 'lexicon',
             'dramatis personae', 'cast of characters', 'index',
-            'bibliography', 'afterword', 'about the author',
+            'bibliography', 'about the author',
             'cartographic', 'map', 'timeline', 'chronology',
             'pronunciation', 'notes', 'acknowledgment'
         ]

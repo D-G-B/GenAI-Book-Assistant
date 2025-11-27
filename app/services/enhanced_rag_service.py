@@ -162,8 +162,9 @@ Answer:"""
                 llm=self.llm,
                 chain_type="stuff",
                 retriever=retriever,
-                chain_type_kwargs={"prompt": PROMPT},
-                return_source_documents=True
+                chain_type_kwargs={"prompt": PROMPT, "verbose": True},
+                return_source_documents=True,
+                verbose = True
             )
 
             # Execute query

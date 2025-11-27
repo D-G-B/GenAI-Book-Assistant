@@ -88,7 +88,7 @@ class ConversationMemoryManager:
         # This uses chat history to resolve pronouns (e.g., "Who is he?" -> "Who is Paul?")
         condense_question_template = """
 Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
-Ensure you resolve any pronouns (he, she, it, they) to the specific characters, places, or objects mentioned in the chat history.
+IT IS VITAL TO ensure you resolve any pronouns (he, she, it, they, his, her) to the specific characters, places, or objects mentioned in the chat history.
 
 Chat History:
 {chat_history}

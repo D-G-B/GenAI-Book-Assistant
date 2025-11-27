@@ -153,7 +153,7 @@ class VectorStoreManager:
 
     def get_retriever(
         self,
-        k: int = 4,
+        k: int = 6,
         document_id: Optional[int] = None,
         max_chapter: Optional[int] = None
     ):

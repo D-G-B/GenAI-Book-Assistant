@@ -299,6 +299,34 @@ async function loadStatus() {
     }
 }
 
+function resetConversation() {
+    // 1. Confirm with user to prevent accidental clicks
+    if (!confirm("Start a new conversation? This will clear the current history and memory.")) {
+        return;
+    }
+
+    // 2. Clear the visual message list
+    const messagesDiv = document.getElementById('messages');
+    messagesDiv.innerHTML = '';
+
+    // 3. Handle logic based on current mode
+    if (currentMode === 'conversational') {
+        // Generate a fresh Session ID so the backend starts a new memory chain
+        sessionId = generateSessionId();
+
+        // Update the debug display if visible
+        const sessionDisplay = document.getElementById('sessionId');
+        if (sessionDisplay) {
+            sessionDisplay.textContent = sessionId.substr(0, 20) + '...';
+        }
+
+        addMessage('assistant', 'Started a new conversation session. I have forgotten our previous context.');
+    } else {
+        // In Simple Mode, just clearing the screen is enough (no memory to reset)
+        addMessage('assistant', 'Chat cleared. Ready for new questions.');
+    }
+}
+
 // Initialize
 loadDocuments();
 loadStatus();
