@@ -80,10 +80,12 @@ class ConversationMemoryManager:
         )
 
     def create_conversational_chain(self, retriever, llm):
-        """Create a conversational retrieval chain with memory."""
+        """Create a conversational retrieval chain with memory and custom persona."""
 
         memory = self.create_memory(k=5)
 
+        # 1. Condense Question Prompt
+        # This uses chat history to resolve pronouns (e.g., "Who is he?" -> "Who is Paul?")
         condense_question_template = """
 Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
 Ensure you resolve any pronouns (he, she, it, they) to the specific characters, places, or objects mentioned in the chat history.
@@ -97,11 +99,36 @@ Standalone Question:"""
 
         condense_question_prompt = PromptTemplate.from_template(condense_question_template)
 
+        # 2. Answer Generation Prompt (Custom Persona)
+        # This takes the Standalone Question + Context and generates the answer
+        qa_template = """You are an expert Reading Companion and Lorekeeper. 
+Your goal is to answer the user's question based ONLY on the context provided below.
+
+Rules:
+1. If the answer is not in the context, say "I don't know based on the current chapters."
+2. Do not make up facts or use outside knowledge.
+3. Be helpful but concise.
+4. If the context contains spoilers (events from later chapters), warn the user.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+        QA_PROMPT = PromptTemplate(
+            template=qa_template,
+            input_variables=["context", "question"]
+        )
+
+        # 3. Create the Chain
         chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
             retriever=retriever,
             memory=memory,
             condense_question_prompt=condense_question_prompt,
+            combine_docs_chain_kwargs={'prompt': QA_PROMPT},  # <--- Injected Here
             return_source_documents=True,
             verbose=True
         )
