@@ -1,5 +1,6 @@
 """
 Enhanced RAG Service - Focuses on RAG queries and answer generation.
+Now supports chapter-based spoiler filtering.
 """
 
 from typing import Dict, Any, Optional
@@ -18,12 +19,6 @@ from app.services.vector_store_manager import VectorStoreManager
 class EnhancedRAGService:
     """
     Enhanced RAG service focused on query processing and answer generation.
-
-    Responsibilities:
-    - Initialize and manage LLM
-    - Process queries using RAG
-    - Generate answers with citations
-    - Manage conversational features
     """
 
     def __init__(self):
@@ -86,7 +81,8 @@ class EnhancedRAGService:
     async def ask_question(
         self,
         question: str,
-        document_id: Optional[int] = None
+        document_id: Optional[int] = None,
+        max_chapter: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Answer a question using RAG.
@@ -94,6 +90,8 @@ class EnhancedRAGService:
         Args:
             question: The question to answer
             document_id: Optional document ID to filter search
+            max_chapter: Optional max chapter for spoiler protection
+                        (None = no filter, show everything)
 
         Returns:
             Dictionary with answer, sources, and metadata
@@ -116,34 +114,45 @@ class EnhancedRAGService:
         try:
             # Create prompt template
             prompt_template = """You are an expert Reading Companion and Lorekeeper for complex Sci-Fi and Fantasy epics.
-            Your goal is to help the user understand the world, remember characters, and track plotlines without inventing information.
+Your goal is to help the user understand the world, remember characters, and track plotlines without inventing information.
 
-            Context from the book/documents:
-            {context}
+Context from the book/documents:
+{context}
 
-            User's Question: {question}
+User's Question: {question}
 
-            Instructions:
-            1. **Role**: Act as a helpful guide. If asked "Who is X?", provide their identity, allegiance, and relation to the protagonist based on the context.
-            2. **Terminology**: If technical terms (like 'Aes Sedai', 'Mentat', 'Cielcin') appear in the context, define them briefly if relevant to the answer.
-            3. **Strict Grounding**: Only use information from the provided context. If the answer is not in the text, state: "I cannot find a reference to that in the current excerpt."
-            4. **Spoilers**: Be cautious. Answer the specific question asked. Do not reveal major future plot twists unless explicitly asked.
-            5. **Clarity**: Complex worlds have complex names. Be precise with spelling and relationships.
+Instructions:
+1. **Role**: Act as a helpful guide. If asked "Who is X?", provide their identity, allegiance, and relation to the protagonist based on the context.
+2. **Terminology**: If technical terms (like 'Aes Sedai', 'Mentat', 'Cielcin') appear in the context, define them briefly if relevant to the answer.
+3. **Strict Grounding**: Only use information from the provided context. If the answer is not in the text, state: "I cannot find a reference to that in the current excerpt."
+4. **Spoilers**: Be cautious. Answer the specific question asked. Do not reveal major future plot twists unless explicitly asked.
+5. **Clarity**: Complex worlds have complex names. Be precise with spelling and relationships.
 
-            Answer:"""
+Answer:"""
 
             PROMPT = PromptTemplate(
                 template=prompt_template,
                 input_variables=["context", "question"]
             )
 
-            # Get retriever (automatically filters deleted docs and optionally filters by document_id)
+            # Log what we're searching
+            filter_info = []
             if document_id is not None:
-                print(f"🔍 Searching only in document ID: {document_id}")
-            else:
-                print(f"🔍 Searching across all documents")
+                filter_info.append(f"document {document_id}")
+            if max_chapter is not None:
+                filter_info.append(f"chapters 1-{max_chapter}")
 
-            retriever = self.vector_store_manager.get_retriever(k=4, document_id=document_id)
+            if filter_info:
+                print(f"🔍 Searching with filters: {', '.join(filter_info)}")
+            else:
+                print(f"🔍 Searching across all documents (no spoiler filter)")
+
+            # Get retriever with filters
+            retriever = self.vector_store_manager.get_retriever(
+                k=4,
+                document_id=document_id,
+                max_chapter=max_chapter
+            )
 
             if retriever is None:
                 return {"error": "Vector store not available"}
@@ -168,20 +177,32 @@ class EnhancedRAGService:
             # Format sources
             sources = []
             for i, doc in enumerate(source_docs):
-                sources.append({
+                source_info = {
                     "document_title": doc.metadata.get('document_title', 'Unknown'),
                     "chunk_index": doc.metadata.get('chunk_index', i),
                     "similarity_score": 0.85
-                })
+                }
 
-            # Calculate confidence (simplified)
+                # Add chapter info if available
+                chapter_num = doc.metadata.get('chapter_number')
+                chapter_title = doc.metadata.get('chapter_title')
+                if chapter_title:
+                    source_info['chapter_title'] = chapter_title
+                if chapter_num:
+                    source_info['chapter_number'] = chapter_num
+
+                sources.append(source_info)
+
+            # Calculate confidence
             confidence = min(0.95, 0.85 * 1.1)
 
             return {
                 "answer": answer,
                 "sources": sources,
                 "confidence": confidence,
-                "chunks_used": len(sources)
+                "chunks_used": len(sources),
+                "spoiler_filter_active": max_chapter is not None,
+                "max_chapter": max_chapter
             }
 
         except Exception as e:

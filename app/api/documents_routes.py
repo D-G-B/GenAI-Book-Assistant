@@ -1,6 +1,5 @@
 """
-FastAPI router for document management endpoints - REFACTORED
-Uses DocumentManager for all operations to ensure synchronization.
+FastAPI router for document management endpoints
 Now supports EPUB files.
 """
 
@@ -8,20 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Q
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.documents import DocumentCreate, DocumentResponse
-from typing import Optional, List
+from typing import Optional
 import tempfile
 import os
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
-
-# Supported file extensions
-SUPPORTED_EXTENSIONS = {
-    'txt', 'md', 'markdown',  # Text formats
-    'pdf',                      # PDF
-    'docx', 'doc',              # Word
-    'csv', 'json',              # Data formats
-    'epub'                      # E-books
-}
 
 
 @router.get("/list")
@@ -29,39 +19,14 @@ async def list_documents(
     include_deleted: bool = Query(False, description="Include soft-deleted documents"),
     db: Session = Depends(get_db)
 ):
-    """
-    Return a list of all uploaded documents with their status.
-
-    Args:
-        include_deleted: If True, includes soft-deleted documents with status field
-    """
+    """Return a list of all uploaded documents with their status."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     documents = enhanced_rag_service.document_manager.list_all_documents(
         db,
         include_deleted=include_deleted
     )
-
     return documents
-
-
-@router.get("/supported-formats")
-async def get_supported_formats():
-    """Get list of supported file formats."""
-    return {
-        "formats": list(SUPPORTED_EXTENSIONS),
-        "descriptions": {
-            "txt": "Plain text files",
-            "md": "Markdown files",
-            "markdown": "Markdown files",
-            "pdf": "PDF documents",
-            "docx": "Microsoft Word documents",
-            "doc": "Microsoft Word documents (legacy)",
-            "csv": "Comma-separated values",
-            "json": "JSON files",
-            "epub": "E-book files (EPUB format)"
-        }
-    }
 
 
 @router.post("/upload", response_model=DocumentResponse)
@@ -88,7 +53,7 @@ async def upload_file(
     db: Session = Depends(get_db)
 ):
     """
-    Upload a document file (supports PDF, TXT, MD, DOCX, EPUB, etc.).
+    Upload a document file (PDF, TXT, MD, DOCX, EPUB, etc.).
     Automatically processes the document after upload.
     """
     from app.database import LoreDocument
@@ -100,52 +65,48 @@ async def upload_file(
 
     file_extension = file.filename.split('.')[-1].lower()
 
-    # Validate file extension
-    if file_extension not in SUPPORTED_EXTENSIONS:
+    # Supported file types
+    supported = {'txt', 'md', 'markdown', 'pdf', 'docx', 'doc', 'csv', 'json', 'epub'}
+    if file_extension not in supported:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type: .{file_extension}. "
-                   f"Supported formats: {', '.join('.' + ext for ext in SUPPORTED_EXTENSIONS)}"
+            detail=f"Unsupported file type: .{file_extension}. Supported: {', '.join(supported)}"
         )
 
     try:
-        # Read file content
         file_content = await file.read()
-
-        # Handle different file types
         content = None
 
+        # === TEXT FILES ===
         if file_extension in ['txt', 'md', 'markdown']:
-            # Text files - decode directly
             content = file_content.decode('utf-8')
 
+        # === PDF FILES ===
         elif file_extension == 'pdf':
-            # PDF files - save temporarily and extract text
             print(f"📄 Processing PDF: {file.filename}")
             content = await _extract_pdf_content(file_content, file.filename)
 
+        # === WORD DOCUMENTS ===
         elif file_extension in ['docx', 'doc']:
-            # Word documents - save temporarily and extract
             print(f"📄 Processing Word document: {file.filename}")
             content = await _extract_word_content(file_content, file.filename, file_extension)
 
+        # === EPUB FILES ===
         elif file_extension == 'epub':
-            # EPUB files - save temporarily and extract
             print(f"📚 Processing EPUB: {file.filename}")
             content = await _extract_epub_content(file_content, file.filename)
 
+        # === DATA FILES ===
         elif file_extension in ['csv', 'json']:
-            # Data files - decode as text
             content = file_content.decode('utf-8')
 
         else:
-            # Unknown file type - try to decode as text
             try:
                 content = file_content.decode('utf-8')
             except:
                 content = f"[Unsupported file type: {file.filename}]"
 
-        # Create document record in database
+        # Create document record
         new_doc = LoreDocument(
             title=title,
             filename=file.filename,
@@ -159,16 +120,12 @@ async def upload_file(
 
         print(f"✅ Document '{title}' saved to database (ID: {new_doc.id})")
 
-        # Process document through document manager
+        # Process through document manager
         success = await enhanced_rag_service.document_manager.add_document(db, new_doc.id)
 
         if not success:
-            # Document was added to DB but processing failed
             print(f"⚠️ Document saved but processing failed")
-            raise HTTPException(
-                status_code=400,
-                detail="Document uploaded but processing failed"
-            )
+            raise HTTPException(status_code=400, detail="Document uploaded but processing failed")
 
         return new_doc
 
@@ -182,41 +139,38 @@ async def upload_file(
         raise HTTPException(status_code=400, detail=f"Failed to upload file: {str(e)}")
 
 
+# === EXTRACTION HELPERS ===
+
 async def _extract_pdf_content(file_content: bytes, filename: str) -> str:
-    """Extract text content from PDF file."""
-    with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf', delete=False) as temp_file:
-        temp_file.write(file_content)
-        temp_path = temp_file.name
+    """Extract text from PDF."""
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf', delete=False) as f:
+        f.write(file_content)
+        temp_path = f.name
 
     try:
         from langchain_community.document_loaders import PyPDFLoader
         loader = PyPDFLoader(temp_path)
         pages = loader.load()
-
-        # Combine all pages
         content = "\n\n".join([page.page_content for page in pages])
 
         if not content.strip():
-            content = "[PDF processed but no text content extracted]"
-            print(f"⚠️ Warning: No text extracted from PDF {filename}")
-        else:
-            print(f"✅ Extracted {len(content)} characters from PDF")
-
+            return "[PDF processed but no text content extracted]"
+        print(f"✅ Extracted {len(content):,} characters from PDF")
         return content
 
     except Exception as e:
-        print(f"❌ Error extracting PDF content: {e}")
-        return f"[PDF file: {filename} - extraction failed]"
+        print(f"❌ Error extracting PDF: {e}")
+        return f"[PDF extraction failed: {str(e)}]"
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
 
 
-async def _extract_word_content(file_content: bytes, filename: str, extension: str) -> str:
-    """Extract text content from Word document."""
-    with tempfile.NamedTemporaryFile(mode='wb', suffix=f'.{extension}', delete=False) as temp_file:
-        temp_file.write(file_content)
-        temp_path = temp_file.name
+async def _extract_word_content(file_content: bytes, filename: str, ext: str) -> str:
+    """Extract text from Word document."""
+    with tempfile.NamedTemporaryFile(mode='wb', suffix=f'.{ext}', delete=False) as f:
+        f.write(file_content)
+        temp_path = f.name
 
     try:
         from langchain_community.document_loaders import UnstructuredWordDocumentLoader
@@ -225,15 +179,13 @@ async def _extract_word_content(file_content: bytes, filename: str, extension: s
         content = "\n\n".join([doc.page_content for doc in docs])
 
         if not content.strip():
-            content = "[Word document processed but no text content extracted]"
-        else:
-            print(f"✅ Extracted {len(content)} characters from Word document")
-
+            return "[Word document processed but no text content extracted]"
+        print(f"✅ Extracted {len(content):,} characters from Word document")
         return content
 
     except Exception as e:
         print(f"❌ Error extracting Word document: {e}")
-        return f"[Word document: {filename} - extraction failed]"
+        return f"[Word extraction failed: {str(e)}]"
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
@@ -241,171 +193,165 @@ async def _extract_word_content(file_content: bytes, filename: str, extension: s
 
 async def _extract_epub_content(file_content: bytes, filename: str) -> str:
     """
-    Extract text content from EPUB file.
-    Uses ebooklib for chapter-aware extraction with BeautifulSoup for HTML parsing.
+    Extract text from EPUB file.
+    Uses ebooklib + BeautifulSoup (pure Python, no system dependencies).
     """
-    with tempfile.NamedTemporaryFile(mode='wb', suffix='.epub', delete=False) as temp_file:
-        temp_file.write(file_content)
-        temp_path = temp_file.name
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.epub', delete=False) as f:
+        f.write(file_content)
+        temp_path = f.name
 
     try:
-        # Try ebooklib first (preferred for chapter awareness)
+        import ebooklib
+        from ebooklib import epub
+        from bs4 import BeautifulSoup
+
+        book = epub.read_epub(temp_path)
+
+        # Get metadata
+        book_title = None
+        book_author = None
         try:
-            import ebooklib
-            from ebooklib import epub
-            from bs4 import BeautifulSoup
+            t = book.get_metadata('DC', 'title')
+            book_title = t[0][0] if t else None
+            a = book.get_metadata('DC', 'creator')
+            book_author = a[0][0] if a else None
+        except:
+            pass
 
-            book = epub.read_epub(temp_path)
+        book_title = book_title or filename
+        book_author = book_author or 'Unknown'
+        print(f"📖 EPUB: {book_title} by {book_author}")
 
-            # Get book metadata
-            book_title = book.get_metadata('DC', 'title')
-            book_title = book_title[0][0] if book_title else filename
+        # Get reading order
+        spine_ids = [item[0] for item in book.spine]
 
-            book_author = book.get_metadata('DC', 'creator')
-            book_author = book_author[0][0] if book_author else 'Unknown'
+        chapters = []
+        chapter_num = 0
 
-            print(f"📖 EPUB: {book_title} by {book_author}")
+        for item in book.get_items():
+            if item.get_type() != ebooklib.ITEM_DOCUMENT:
+                continue
+            if item.get_id() not in spine_ids:
+                continue
 
-            # Extract text from all document items
-            chapters = []
-            chapter_count = 0
+            # Parse HTML
+            soup = BeautifulSoup(item.get_content(), 'html.parser')
 
-            for item in book.get_items():
-                if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                    html_content = item.get_content()
-                    soup = BeautifulSoup(html_content, 'html.parser')
+            # Remove non-content
+            for elem in soup(['script', 'style', 'nav']):
+                elem.decompose()
 
-                    # Extract text from paragraphs
-                    text_parts = []
-                    for tag in ['p', 'div', 'h1', 'h2', 'h3', 'h4']:
-                        for element in soup.find_all(tag):
-                            text = element.get_text(' ', strip=True)
-                            if text and len(text) > 5:
-                                text_parts.append(text)
+            # Find title
+            title = None
+            for tag in ['h1', 'h2']:
+                elem = soup.find(tag)
+                if elem:
+                    t = elem.get_text(strip=True)
+                    if t and 2 < len(t) < 200:
+                        title = t
+                        break
 
-                    chapter_text = '\n\n'.join(text_parts)
+            # Extract text
+            text_parts = []
+            for tag in ['p', 'div', 'blockquote', 'li']:
+                for element in soup.find_all(tag):
+                    text = element.get_text(' ', strip=True)
+                    if text and len(text) > 5:
+                        text_parts.append(text)
 
-                    # Only include substantial chapters
-                    if len(chapter_text) > 100:
-                        chapter_count += 1
-                        chapters.append(f"--- Chapter {chapter_count} ---\n\n{chapter_text}")
+            chapter_text = '\n\n'.join(text_parts)
 
-            content = '\n\n'.join(chapters)
+            if len(chapter_text.strip()) < 50:
+                continue
 
-            if not content.strip():
-                content = "[EPUB processed but no text content extracted]"
-                print(f"⚠️ Warning: No text extracted from EPUB {filename}")
-            else:
-                print(f"✅ Extracted {len(content)} characters from {chapter_count} chapters")
+            chapter_num += 1
+            chapter_title = title or f"Section {chapter_num}"
+            chapters.append(f"=== {chapter_title} ===\n\n{chapter_text}")
 
-            return content
+        content = '\n\n'.join(chapters)
 
-        except ImportError:
-            # Fallback to UnstructuredEPubLoader
-            print("⚠️ ebooklib not available, trying UnstructuredEPubLoader...")
+        if not content.strip():
+            return "[EPUB processed but no text content extracted]"
+
+        print(f"✅ Extracted {len(content):,} characters from {chapter_num} sections")
+        return content
+
+    except ImportError:
+        # Fallback
+        print("⚠️ ebooklib not available, trying UnstructuredEPubLoader...")
+        try:
             from langchain_community.document_loaders import UnstructuredEPubLoader
-
             loader = UnstructuredEPubLoader(temp_path, mode="single")
             docs = loader.load()
             content = "\n\n".join([doc.page_content for doc in docs])
-
-            if not content.strip():
-                content = "[EPUB processed but no text content extracted]"
-            else:
-                print(f"✅ Extracted {len(content)} characters from EPUB (unstructured)")
-
-            return content
+            if content.strip():
+                return content
+            return "[EPUB processed but no text content extracted]"
+        except Exception as e:
+            return f"[EPUB extraction failed: {str(e)}]"
 
     except Exception as e:
-        print(f"❌ Error extracting EPUB content: {e}")
+        print(f"❌ Error extracting EPUB: {e}")
         import traceback
         traceback.print_exc()
-        return f"[EPUB file: {filename} - extraction failed: {str(e)}]"
+        return f"[EPUB extraction failed: {str(e)}]"
+
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
 
 
+# === OTHER ROUTES (unchanged) ===
+
 @router.delete("/all")
 async def delete_all_documents(db: Session = Depends(get_db)):
-    """
-    Delete all documents.
-    Clears database, vector store, and manifest.
-    """
+    """Delete all documents."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     try:
         success = enhanced_rag_service.document_manager.delete_all_documents(db)
-
         if not success:
             raise HTTPException(status_code=400, detail="Failed to delete all documents")
-
         return {"message": "All documents deleted successfully"}
-
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to delete documents: {str(e)}")
 
 
 @router.delete("/{document_id}")
 async def delete_document(document_id: int, db: Session = Depends(get_db)):
-    """
-    Delete a document (soft delete).
-    Removes from database and marks as deleted in vector store.
-    """
+    """Delete a document (soft delete)."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     success = enhanced_rag_service.document_manager.delete_document(db, document_id)
-
     if not success:
         raise HTTPException(status_code=404, detail="Document not found or deletion failed")
-
     return {"message": f"Document {document_id} successfully deleted"}
 
 
 @router.post("/{document_id}/process")
 async def process_document(document_id: int, db: Session = Depends(get_db)):
-    """
-    Process an uploaded document for RAG (chunking and embedding).
-    Normally called automatically after upload.
-    """
+    """Process an uploaded document for RAG."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     success = await enhanced_rag_service.document_manager.add_document(db, document_id)
-
     if not success:
         raise HTTPException(status_code=400, detail="Failed to process document")
-
     return {"message": "Document processed successfully"}
 
 
 @router.post("/rebuild-index")
 async def rebuild_index(db: Session = Depends(get_db)):
-    """
-    Rebuild the vector store index from scratch.
-
-    This operation:
-    - Physically removes soft-deleted documents from the index
-    - Optimizes the index for better performance
-    - Reprocesses all active documents
-
-    Use this periodically or when deleted documents exceed 20% of the index.
-    """
+    """Rebuild the vector store index from scratch."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     try:
-        print("🔄 Starting index rebuild (this may take a while)...")
-
+        print("🔄 Starting index rebuild...")
         success = await enhanced_rag_service.document_manager.rebuild_index(db)
-
         if not success:
             raise HTTPException(status_code=400, detail="Index rebuild failed")
 
         stats = enhanced_rag_service.document_manager.get_stats()
-
-        return {
-            "message": "Index rebuilt successfully",
-            "stats": stats
-        }
+        return {"message": "Index rebuilt successfully", "stats": stats}
 
     except Exception as e:
         import traceback
@@ -415,13 +361,11 @@ async def rebuild_index(db: Session = Depends(get_db)):
 
 @router.get("/{document_id}/status")
 async def get_document_status(document_id: int, db: Session = Depends(get_db)):
-    """Get the status of a document across all systems."""
+    """Get the status of a document."""
     from app.services.enhanced_rag_service import enhanced_rag_service
     from app.database import LoreDocument
 
-    # Check if document exists in database
     db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
-
     if not db_doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -442,7 +386,4 @@ async def get_document_status(document_id: int, db: Session = Depends(get_db)):
 async def get_stats(db: Session = Depends(get_db)):
     """Get overall statistics about document processing."""
     from app.services.enhanced_rag_service import enhanced_rag_service
-
-    stats = enhanced_rag_service.document_manager.get_stats()
-
-    return stats
+    return enhanced_rag_service.document_manager.get_stats()

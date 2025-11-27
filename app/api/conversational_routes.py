@@ -1,6 +1,6 @@
 """
-API routes for conversational chat with memory - REFACTORED
-Works with the refactored enhanced_rag_service.
+API routes for conversational chat with memory.
+Now supports chapter-based spoiler filtering.
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -20,12 +20,16 @@ async def ask_conversational(
     session_id: Optional[str] = Query(None, description="Conversation session ID"),
     user_id: Optional[str] = Query(None, description="User identifier"),
     document_id: Optional[int] = Query(None, description="Filter search to specific document"),
+    max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter"),
     db: Session = Depends(get_db)
 ):
     """
     Ask a question with conversational memory.
     Follow-up questions will use context from previous messages in the same session.
-    Optionally filter to a specific document.
+
+    Spoiler Protection:
+    - max_chapter=None (default): Search entire book
+    - max_chapter=15: Only search chapters 1-15 plus reference material
     """
     from app.services.enhanced_rag_service import enhanced_rag_service
 
@@ -43,7 +47,8 @@ async def ask_conversational(
         question=request.question,
         session_id=session_id,
         user_id=user_id,
-        document_id=document_id
+        document_id=document_id,
+        max_chapter=max_chapter
     )
 
     if "error" in result:

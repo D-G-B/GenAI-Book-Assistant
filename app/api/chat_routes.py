@@ -1,6 +1,6 @@
 """
-FastAPI router for chat/question-answering endpoints - REFACTORED
-Works with the refactored enhanced_rag_service.
+FastAPI router for chat/question-answering endpoints.
+Now supports chapter-based spoiler filtering.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,9 +16,16 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 async def ask_question(
     request: ChatRequest,
     db: Session = Depends(get_db),
-    document_id: Optional[int] = Query(None, description="Filter search to specific document")
+    document_id: Optional[int] = Query(None, description="Filter search to specific document"),
+    max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter (None = full book)")
 ):
-    """Ask a question about the uploaded documents."""
+    """
+    Ask a question about the uploaded documents.
+
+    Spoiler Protection:
+    - max_chapter=None (default): Search entire book, no spoiler filtering
+    - max_chapter=15: Only search chapters 1-15 plus reference material (glossaries, appendices)
+    """
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     if not request.question.strip():
@@ -27,7 +34,8 @@ async def ask_question(
     try:
         result = await enhanced_rag_service.ask_question(
             request.question,
-            document_id=document_id
+            document_id=document_id,
+            max_chapter=max_chapter
         )
 
         if "error" in result:

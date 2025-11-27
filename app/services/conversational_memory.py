@@ -1,6 +1,6 @@
 """
-Conversational memory system for context-aware conversations
-
+Conversational memory system for context-aware conversations.
+Now supports chapter-based spoiler filtering.
 """
 
 from typing import List, Dict, Any, Optional
@@ -51,7 +51,6 @@ class ConversationMemoryManager:
     def get_or_create_session(self, session_id: str, user_id: Optional[str] = None) -> ConversationSession:
         """Get existing session or create a new one."""
         if session_id not in self.sessions:
-            # Clean up old sessions if at limit
             if len(self.sessions) >= self.max_sessions:
                 self._cleanup_oldest_session()
 
@@ -85,21 +84,19 @@ class ConversationMemoryManager:
 
         memory = self.create_memory(k=5)
 
-        # Custom prompt for conversational context
         condense_question_template = """
-            Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
-            Ensure you resolve any pronouns (he, she, it, they) to the specific characters, places, or objects mentioned in the chat history.
-    
-            Chat History:
-            {chat_history}
-    
-            Follow Up Question: {question}
-    
-            Standalone Question:"""
+Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
+Ensure you resolve any pronouns (he, she, it, they) to the specific characters, places, or objects mentioned in the chat history.
+
+Chat History:
+{chat_history}
+
+Follow Up Question: {question}
+
+Standalone Question:"""
 
         condense_question_prompt = PromptTemplate.from_template(condense_question_template)
 
-        # Create conversational chain
         chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
             retriever=retriever,
@@ -113,21 +110,31 @@ class ConversationMemoryManager:
 
 
 class ContextAwareRAG:
-    """RAG system with conversational memory."""
+    """RAG system with conversational memory and spoiler filtering."""
 
     def __init__(self, base_rag_service):
         self.base_rag = base_rag_service
         self.memory_manager = ConversationMemoryManager()
-        self.active_chains: Dict[str, Any] = {}  # Session ID -> Chain
+        self.active_chains: Dict[str, Any] = {}
 
     async def ask_with_context(
         self,
         question: str,
         session_id: str,
         user_id: Optional[str] = None,
-        document_id: Optional[int] = None
+        document_id: Optional[int] = None,
+        max_chapter: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Ask a question with conversational context, optionally filtered to a document."""
+        """
+        Ask a question with conversational context.
+
+        Args:
+            question: The question to ask
+            session_id: Conversation session ID
+            user_id: Optional user identifier
+            document_id: Optional document filter
+            max_chapter: Optional spoiler filter (None = full book)
+        """
 
         if not question.strip():
             return {"error": "Question cannot be empty"}
@@ -139,25 +146,32 @@ class ContextAwareRAG:
             return {"error": "No documents available"}
 
         try:
-            # Get or create session
             session = self.memory_manager.get_or_create_session(session_id, user_id)
 
-            # Create chain key that includes document_id to maintain separate chains per filter
-            chain_key = f"{session_id}_{document_id}" if document_id else session_id
+            # Create chain key that includes all filters
+            # This ensures separate chains for different filter combinations
+            chain_key = f"{session_id}_{document_id}_{max_chapter}"
 
-            # Create or get conversational chain for this session/filter combination
             if chain_key not in self.active_chains:
-                # Use vector store manager's get_retriever method (handles filtering)
+                # Get retriever with filters
                 retriever = self.base_rag.vector_store_manager.get_retriever(
                     k=4,
-                    document_id=document_id
+                    document_id=document_id,
+                    max_chapter=max_chapter
                 )
 
                 if retriever is None:
                     return {"error": "Vector store not available"}
 
+                # Log filter info
+                filter_info = []
                 if document_id is not None:
-                    print(f"💬 Conversational search in document ID: {document_id}")
+                    filter_info.append(f"doc {document_id}")
+                if max_chapter is not None:
+                    filter_info.append(f"ch 1-{max_chapter}")
+
+                if filter_info:
+                    print(f"💬 Conversational search with filters: {', '.join(filter_info)}")
 
                 chain = self.memory_manager.create_conversational_chain(
                     retriever=retriever,
@@ -167,28 +181,32 @@ class ContextAwareRAG:
             else:
                 chain = self.active_chains[chain_key]
 
-            # Add question to session history
             session.add_message('human', question)
 
             print(f"💬 Conversational question (Session: {session_id[:8]}...): {question}")
 
-            # Run the conversational chain
             result = chain({"question": question})
 
-            # Extract information
             answer = result.get('answer', 'No answer generated')
             source_docs = result.get('source_documents', [])
 
-            # Process sources
             sources = []
             for i, doc in enumerate(source_docs):
-                sources.append({
+                source_info = {
                     "document_title": doc.metadata.get('document_title', 'Unknown'),
                     "chunk_index": doc.metadata.get('chunk_index', i),
                     "similarity_score": 0.85
-                })
+                }
 
-            # Add answer to session history
+                chapter_num = doc.metadata.get('chapter_number')
+                chapter_title = doc.metadata.get('chapter_title')
+                if chapter_title:
+                    source_info['chapter_title'] = chapter_title
+                if chapter_num:
+                    source_info['chapter_number'] = chapter_num
+
+                sources.append(source_info)
+
             session.add_message('assistant', answer)
 
             return {
@@ -198,8 +216,10 @@ class ContextAwareRAG:
                 "chunks_used": len(sources),
                 "session_id": session_id,
                 "conversation_length": len(session.messages),
-                "context_used": len(session.messages) > 2,  # True if more than just this Q&A
-                "filtered_to_document": document_id
+                "context_used": len(session.messages) > 2,
+                "filtered_to_document": document_id,
+                "spoiler_filter_active": max_chapter is not None,
+                "max_chapter": max_chapter
             }
 
         except Exception as e:
@@ -228,7 +248,6 @@ class ContextAwareRAG:
         if session_id in self.memory_manager.sessions:
             del self.memory_manager.sessions[session_id]
 
-        # Clear all chains associated with this session
         keys_to_delete = [k for k in self.active_chains.keys() if k.startswith(session_id)]
         for key in keys_to_delete:
             del self.active_chains[key]
@@ -243,7 +262,7 @@ class ContextAwareRAG:
         ]
 
 
-# Global instance - will be initialized with base RAG service
+# Global instance
 context_aware_rag = None
 
 def initialize_context_aware_rag(base_rag_service):

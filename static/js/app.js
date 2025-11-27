@@ -1,5 +1,7 @@
 let currentMode = 'simple';
 let sessionId = null;
+let spoilerProtectionEnabled = false;
+let maxChapter = null;
 
 function generateSessionId() {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -20,6 +22,36 @@ function setMode(mode) {
         document.getElementById('sessionInfo').style.display = 'none';
         addMessage('assistant', `Simple Q&A mode. Each question is independent.`);
     }
+}
+
+function toggleSpoilerProtection() {
+    const toggle = document.getElementById('spoilerToggle');
+    const sliderContainer = document.getElementById('sliderContainer');
+    const statusDisplay = document.getElementById('spoilerStatus');
+
+    spoilerProtectionEnabled = toggle.checked;
+
+    if (spoilerProtectionEnabled) {
+        sliderContainer.style.display = 'block';
+        maxChapter = parseInt(document.getElementById('chapterSlider').value);
+        statusDisplay.textContent = `ON - Up to Ch. ${maxChapter}`;
+        statusDisplay.classList.add('active');
+    } else {
+        sliderContainer.style.display = 'none';
+        maxChapter = null;
+        statusDisplay.textContent = 'OFF - Full Book';
+        statusDisplay.classList.remove('active');
+    }
+}
+
+function updateChapterDisplay() {
+    const slider = document.getElementById('chapterSlider');
+    const display = document.getElementById('chapterValue');
+    const statusDisplay = document.getElementById('spoilerStatus');
+
+    maxChapter = parseInt(slider.value);
+    display.textContent = maxChapter;
+    statusDisplay.textContent = `ON - Up to Ch. ${maxChapter}`;
 }
 
 async function uploadDocument() {
@@ -86,18 +118,27 @@ async function loadDocuments() {
             return;
         }
 
-        listDiv.innerHTML = docs.map(doc => `
-            <div class="doc-item">
-                <div>
-                    <div class="doc-title">${doc.title}</div>
-                    <div class="doc-filename">${doc.filename}</div>
+        listDiv.innerHTML = docs.map(doc => {
+            const chapterInfo = doc.total_chapters ? ` (${doc.total_chapters} ch.)` : '';
+            return `
+                <div class="doc-item">
+                    <div>
+                        <div class="doc-title">${doc.title}${chapterInfo}</div>
+                        <div class="doc-filename">${doc.filename}</div>
+                    </div>
+                    <button class="delete-btn" onclick="deleteDocument(${doc.id})">Delete</button>
                 </div>
-                <button class="delete-btn" onclick="deleteDocument(${doc.id})">Delete</button>
-            </div>
-        `).join('');
+            `;
+        }).join('');
 
         filterSelect.innerHTML = '<option value="">Search in: All Documents</option>' +
             docs.map(doc => `<option value="${doc.id}">${doc.title}</option>`).join('');
+
+        // Update slider max based on document chapters
+        const maxChapters = Math.max(...docs.map(d => d.total_chapters || 50));
+        if (maxChapters > 0) {
+            document.getElementById('chapterSlider').max = maxChapters;
+        }
 
     } catch (error) {
         console.error('Failed to load documents:', error);
@@ -138,17 +179,24 @@ async function askQuestion() {
 
         let url, body;
 
+        // Build query params
+        const params = new URLSearchParams();
+        if (documentId) {
+            params.append('document_id', documentId);
+        }
+        if (spoilerProtectionEnabled && maxChapter) {
+            params.append('max_chapter', maxChapter);
+        }
+        const queryString = params.toString() ? `?${params.toString()}` : '';
+
         if (currentMode === 'conversational') {
-            url = `/api/v1/conversation/ask?session_id=${sessionId}`;
-            if (documentId) {
-                url += `&document_id=${documentId}`;
+            if (sessionId) {
+                params.set('session_id', sessionId);
             }
+            url = `/api/v1/conversation/ask?${params.toString()}`;
             body = {question: question};
         } else {
-            url = '/api/v1/chat/ask';
-            if (documentId) {
-                url += `?document_id=${documentId}`;
-            }
+            url = `/api/v1/chat/ask${queryString}`;
             body = {question: question, max_chunks: 3};
         }
 
@@ -163,7 +211,12 @@ async function askQuestion() {
         if (result.error) {
             addMessage('assistant', `Error: ${result.error}`);
         } else {
-            addMessage('assistant', result.answer, result.sources);
+            // Add spoiler filter indicator to response if active
+            let answer = result.answer;
+            if (result.spoiler_filter_active) {
+                answer = `📖 *[Searching chapters 1-${result.max_chapter} + reference material]*\n\n${answer}`;
+            }
+            addMessage('assistant', answer, result.sources);
         }
     } catch (error) {
         addMessage('assistant', `Error: ${error.message}`);
@@ -179,22 +232,23 @@ function addMessage(role, content, sources = []) {
 
     messageDiv.className = role === 'user' ? 'message user' : 'message assistant';
 
-    let html = `<p>${content}</p>`;
+    // Convert markdown-style italics for spoiler indicator
+    const formattedContent = content.replace(/\*\[(.+?)\]\*/g, '<em style="color: #888; font-size: 0.85em;">[$1]</em>');
+
+    let html = `<p>${formattedContent}</p>`;
 
     if (sources && sources.length > 0) {
-        // Group sources by document title
         const sourceMap = sources.reduce((acc, source) => {
-            if (!acc[source.document_title]) {
-                acc[source.document_title] = [];
+            const key = source.chapter_title || source.document_title;
+            if (!acc[key]) {
+                acc[key] = [];
             }
-            // Avoid duplicate chunk indices
-            if (!acc[source.document_title].includes(source.chunk_index)) {
-                acc[source.document_title].push(source.chunk_index);
+            if (!acc[key].includes(source.chunk_index)) {
+                acc[key].push(source.chunk_index);
             }
             return acc;
         }, {});
 
-        // Format as: "DocTitle (chunks: 1, 2, 3) | DocTitle2 (chunks: 4, 5)"
         const sourceHtml = Object.keys(sourceMap).map(title => {
             const chunks = sourceMap[title].sort((a, b) => a - b).join(', ');
             return `${title} (${chunks})`;
@@ -232,7 +286,7 @@ async function loadStatus() {
     }
 }
 
-// Initialize on page load
+// Initialize
 loadDocuments();
 loadStatus();
 setInterval(loadStatus, 30000);

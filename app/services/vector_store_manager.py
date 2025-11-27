@@ -1,5 +1,6 @@
 """
 Vector Store Manager - Handles FAISS operations, soft deletes, and filtering.
+Now supports chapter-based spoiler filtering.
 """
 
 from typing import List, Dict, Any, Optional, Set
@@ -13,7 +14,7 @@ from langchain.schema import Document
 
 
 class VectorStoreManager:
-    """Manages FAISS vector store with soft delete support."""
+    """Manages FAISS vector store with soft delete and spoiler filtering support."""
 
     def __init__(self, persist_path: str = "./faiss_index"):
         self.persist_path = Path(persist_path)
@@ -108,11 +109,9 @@ class VectorStoreManager:
 
         try:
             if self.vector_store is None:
-                # Create new vector store
                 self.vector_store = FAISS.from_documents(documents, self.embeddings)
                 print(f"✅ Created vector store with {len(documents)} chunks")
             else:
-                # Add to existing vector store
                 success_count = 0
                 for doc in documents:
                     try:
@@ -128,7 +127,6 @@ class VectorStoreManager:
                     print(f"❌ Failed to add any chunks")
                     return False
 
-            # Save after adding
             self.save_to_disk()
             return True
 
@@ -153,44 +151,73 @@ class VectorStoreManager:
         """Check if a document is soft-deleted."""
         return document_id in self.deleted_document_ids
 
-    def get_retriever(self, k: int = 4, document_id: Optional[int] = None):
+    def get_retriever(
+        self,
+        k: int = 4,
+        document_id: Optional[int] = None,
+        max_chapter: Optional[int] = None
+    ):
         """
-        Get a retriever that automatically filters out soft-deleted documents.
-        Optionally filter to a specific document.
+        Get a retriever with filtering support.
+
+        Args:
+            k: Number of results to return
+            document_id: Optional - filter to specific document
+            max_chapter: Optional - filter to chapters <= this number (spoiler protection)
+                        Reference material (is_reference_material=True) is always included
         """
         if self.vector_store is None:
             return None
 
         def filter_function(metadata: Dict[str, Any]) -> bool:
-            """Filter out deleted documents and optionally filter by document_id."""
+            """Filter based on document_id, deleted status, and chapter number."""
             doc_id = metadata.get("document_id")
 
             # Filter out soft-deleted documents
             if doc_id in self.deleted_document_ids:
                 return False
 
-            # If specific document requested, filter to only that
+            # Filter to specific document if requested
             if document_id is not None:
-                return doc_id == document_id
+                if doc_id != document_id:
+                    return False
+
+            # Spoiler filter - chapter-based
+            if max_chapter is not None:
+                # Always include reference material (glossaries, appendices)
+                is_reference = metadata.get("is_reference_material", False)
+                if is_reference:
+                    return True
+
+                # For narrative content, check chapter number
+                chunk_chapter = metadata.get("chapter_number")
+
+                # If chunk has no chapter number, include it (might be intro/frontmatter)
+                if chunk_chapter is None:
+                    return True
+
+                # Filter out chapters beyond max_chapter
+                if chunk_chapter > max_chapter:
+                    return False
 
             return True
 
+        # Increase fetch_k when filtering to ensure we get enough results
+        fetch_k = k * 4 if (document_id or max_chapter) else k * 2
+
         search_kwargs = {
             "k": k,
+            "fetch_k": fetch_k,
             "filter": filter_function
         }
 
         return self.vector_store.as_retriever(search_kwargs=search_kwargs)
 
     def rebuild_index(self, all_documents: List[Document]) -> bool:
-        """
-        Rebuild the vector store from scratch, excluding soft-deleted documents.
-        This reclaims space and improves performance.
-        """
+        """Rebuild the vector store from scratch."""
         print("🔄 Rebuilding vector store index...")
 
         try:
-            # Filter out documents that are soft-deleted
             active_docs = [
                 doc for doc in all_documents
                 if doc.metadata.get("document_id") not in self.deleted_document_ids
@@ -201,19 +228,15 @@ class VectorStoreManager:
                 self.vector_store = None
                 return True
 
-            # Create new vector store from active documents only
             self.vector_store = FAISS.from_documents(active_docs, self.embeddings)
 
-            # Clear soft-deleted IDs since they're now physically removed
             old_deleted_count = len(self.deleted_document_ids)
             self.deleted_document_ids.clear()
 
-            # Save everything
             self.save_to_disk()
 
             chunk_count = self.vector_store.index.ntotal
-            print(
-                f"✅ Index rebuilt: {chunk_count} chunks from {len(set(doc.metadata.get('document_id') for doc in active_docs))} documents")
+            print(f"✅ Index rebuilt: {chunk_count} chunks")
             print(f"   🗑️ Physically removed {old_deleted_count} soft-deleted documents")
 
             return True
@@ -225,12 +248,7 @@ class VectorStoreManager:
             return False
 
     def should_rebuild(self, threshold: float = 0.2) -> bool:
-        """
-        Check if index should be rebuilt based on ratio of deleted documents.
-
-        Args:
-            threshold: Rebuild if deleted docs exceed this ratio (default 20%)
-        """
+        """Check if index should be rebuilt based on ratio of deleted documents."""
         if not self.vector_store:
             return False
 
@@ -241,9 +259,7 @@ class VectorStoreManager:
             if total_chunks == 0:
                 return False
 
-            # Rough estimate: assume each deleted doc has similar chunk count
-            deleted_ratio = deleted_count / (deleted_count + 10)  # Conservative estimate
-
+            deleted_ratio = deleted_count / (deleted_count + 10)
             return deleted_ratio > threshold
         except:
             return False
