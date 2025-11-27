@@ -87,14 +87,15 @@ class ConversationMemoryManager:
 
         # Custom prompt for conversational context
         condense_question_template = """
-Given the following conversation and a follow-up question, rephrase the follow-up question to be a standalone question that incorporates relevant context from the conversation history.
-
-Chat History:
-{chat_history}
-
-Follow Up Question: {question}
-
-Standalone Question:"""
+            Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
+            Ensure you resolve any pronouns (he, she, it, they) to the specific characters, places, or objects mentioned in the chat history.
+    
+            Chat History:
+            {chat_history}
+    
+            Follow Up Question: {question}
+    
+            Standalone Question:"""
 
         condense_question_prompt = PromptTemplate.from_template(condense_question_template)
 
