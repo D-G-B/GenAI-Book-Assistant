@@ -345,6 +345,13 @@ input[type="file"] {
     animation: spin 0.8s linear infinite;
 }
 
+.format-hint {
+    font-size: 0.75em;
+    color: #666;
+    margin-bottom: 10px;
+    padding: 4px 0;
+}
+
 @keyframes spin {
     to { transform: rotate(360deg); }
 }

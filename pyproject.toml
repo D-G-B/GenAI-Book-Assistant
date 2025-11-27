@@ -1,11 +1,13 @@
 [project]
 name = "ms-final-proj"
 version = "0.1.0"
-description = "Add your description here"
+description = "RAG Reading Partner for Sci-Fi/Fantasy Literature"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.74.1",
+    "beautifulsoup4>=4.12.0",      # For EPUB HTML parsing
+    "ebooklib>=0.18",               # For EPUB reading - NEW
     "faiss-cpu==1.8.0",
     "fastapi==0.104.1",
     "google-generativeai>=0.5.4",
@@ -16,6 +18,7 @@ dependencies = [
     "langchain-core>=0.1.53",
     "langchain-google-genai>=1.0.4",
     "langchain-openai>=0.1.6",
+    "lxml>=4.9.0",                  # For ebooklib XML parsing
     "numpy==1.26.2",
     "openai>=1.109.1",
     "pydantic==2.5.0",

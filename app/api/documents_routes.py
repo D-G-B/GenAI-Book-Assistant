@@ -1,6 +1,7 @@
 """
 FastAPI router for document management endpoints - REFACTORED
 Uses DocumentManager for all operations to ensure synchronization.
+Now supports EPUB files.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
@@ -9,8 +10,18 @@ from app.database import get_db
 from app.schemas.documents import DocumentCreate, DocumentResponse
 from typing import Optional, List
 import tempfile
+import os
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
+
+# Supported file extensions
+SUPPORTED_EXTENSIONS = {
+    'txt', 'md', 'markdown',  # Text formats
+    'pdf',                      # PDF
+    'docx', 'doc',              # Word
+    'csv', 'json',              # Data formats
+    'epub'                      # E-books
+}
 
 
 @router.get("/list")
@@ -32,6 +43,25 @@ async def list_documents(
     )
 
     return documents
+
+
+@router.get("/supported-formats")
+async def get_supported_formats():
+    """Get list of supported file formats."""
+    return {
+        "formats": list(SUPPORTED_EXTENSIONS),
+        "descriptions": {
+            "txt": "Plain text files",
+            "md": "Markdown files",
+            "markdown": "Markdown files",
+            "pdf": "PDF documents",
+            "docx": "Microsoft Word documents",
+            "doc": "Microsoft Word documents (legacy)",
+            "csv": "Comma-separated values",
+            "json": "JSON files",
+            "epub": "E-book files (EPUB format)"
+        }
+    }
 
 
 @router.post("/upload", response_model=DocumentResponse)
@@ -58,7 +88,7 @@ async def upload_file(
     db: Session = Depends(get_db)
 ):
     """
-    Upload a document file (supports PDF, TXT, MD, DOCX, etc.).
+    Upload a document file (supports PDF, TXT, MD, DOCX, EPUB, etc.).
     Automatically processes the document after upload.
     """
     from app.database import LoreDocument
@@ -69,6 +99,14 @@ async def upload_file(
         title = file.filename.rsplit('.', 1)[0]
 
     file_extension = file.filename.split('.')[-1].lower()
+
+    # Validate file extension
+    if file_extension not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: .{file_extension}. "
+                   f"Supported formats: {', '.join('.' + ext for ext in SUPPORTED_EXTENSIONS)}"
+        )
 
     try:
         # Read file content
@@ -84,62 +122,22 @@ async def upload_file(
         elif file_extension == 'pdf':
             # PDF files - save temporarily and extract text
             print(f"📄 Processing PDF: {file.filename}")
-
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf', delete=False) as temp_file:
-                temp_file.write(file_content)
-                temp_path = temp_file.name
-
-            try:
-                # Use PyPDF to extract text
-                from langchain_community.document_loaders import PyPDFLoader
-                loader = PyPDFLoader(temp_path)
-                pages = loader.load()
-
-                # Combine all pages
-                content = "\n\n".join([page.page_content for page in pages])
-
-                if not content.strip():
-                    content = "[PDF processed but no text content extracted]"
-                    print(f"⚠️ Warning: No text extracted from PDF {file.filename}")
-                else:
-                    print(f"✅ Extracted {len(content)} characters from PDF")
-
-            except Exception as e:
-                print(f"❌ Error extracting PDF content: {e}")
-                content = f"[PDF file: {file.filename} - extraction failed]"
-            finally:
-                # Clean up temp file
-                import os
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
+            content = await _extract_pdf_content(file_content, file.filename)
 
         elif file_extension in ['docx', 'doc']:
             # Word documents - save temporarily and extract
             print(f"📄 Processing Word document: {file.filename}")
+            content = await _extract_word_content(file_content, file.filename, file_extension)
 
-            with tempfile.NamedTemporaryFile(mode='wb', suffix=f'.{file_extension}', delete=False) as temp_file:
-                temp_file.write(file_content)
-                temp_path = temp_file.name
+        elif file_extension == 'epub':
+            # EPUB files - save temporarily and extract
+            print(f"📚 Processing EPUB: {file.filename}")
+            content = await _extract_epub_content(file_content, file.filename)
 
-            try:
-                from langchain_community.document_loaders import UnstructuredWordDocumentLoader
-                loader = UnstructuredWordDocumentLoader(temp_path)
-                docs = loader.load()
-                content = "\n\n".join([doc.page_content for doc in docs])
+        elif file_extension in ['csv', 'json']:
+            # Data files - decode as text
+            content = file_content.decode('utf-8')
 
-                if not content.strip():
-                    content = "[Word document processed but no text content extracted]"
-                else:
-                    print(f"✅ Extracted {len(content)} characters from Word document")
-
-            except Exception as e:
-                print(f"❌ Error extracting Word document: {e}")
-                content = f"[Word document: {file.filename} - extraction failed]"
-            finally:
-                import os
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
         else:
             # Unknown file type - try to decode as text
             try:
@@ -182,6 +180,150 @@ async def upload_file(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=400, detail=f"Failed to upload file: {str(e)}")
+
+
+async def _extract_pdf_content(file_content: bytes, filename: str) -> str:
+    """Extract text content from PDF file."""
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf', delete=False) as temp_file:
+        temp_file.write(file_content)
+        temp_path = temp_file.name
+
+    try:
+        from langchain_community.document_loaders import PyPDFLoader
+        loader = PyPDFLoader(temp_path)
+        pages = loader.load()
+
+        # Combine all pages
+        content = "\n\n".join([page.page_content for page in pages])
+
+        if not content.strip():
+            content = "[PDF processed but no text content extracted]"
+            print(f"⚠️ Warning: No text extracted from PDF {filename}")
+        else:
+            print(f"✅ Extracted {len(content)} characters from PDF")
+
+        return content
+
+    except Exception as e:
+        print(f"❌ Error extracting PDF content: {e}")
+        return f"[PDF file: {filename} - extraction failed]"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+async def _extract_word_content(file_content: bytes, filename: str, extension: str) -> str:
+    """Extract text content from Word document."""
+    with tempfile.NamedTemporaryFile(mode='wb', suffix=f'.{extension}', delete=False) as temp_file:
+        temp_file.write(file_content)
+        temp_path = temp_file.name
+
+    try:
+        from langchain_community.document_loaders import UnstructuredWordDocumentLoader
+        loader = UnstructuredWordDocumentLoader(temp_path)
+        docs = loader.load()
+        content = "\n\n".join([doc.page_content for doc in docs])
+
+        if not content.strip():
+            content = "[Word document processed but no text content extracted]"
+        else:
+            print(f"✅ Extracted {len(content)} characters from Word document")
+
+        return content
+
+    except Exception as e:
+        print(f"❌ Error extracting Word document: {e}")
+        return f"[Word document: {filename} - extraction failed]"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+async def _extract_epub_content(file_content: bytes, filename: str) -> str:
+    """
+    Extract text content from EPUB file.
+    Uses ebooklib for chapter-aware extraction with BeautifulSoup for HTML parsing.
+    """
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.epub', delete=False) as temp_file:
+        temp_file.write(file_content)
+        temp_path = temp_file.name
+
+    try:
+        # Try ebooklib first (preferred for chapter awareness)
+        try:
+            import ebooklib
+            from ebooklib import epub
+            from bs4 import BeautifulSoup
+
+            book = epub.read_epub(temp_path)
+
+            # Get book metadata
+            book_title = book.get_metadata('DC', 'title')
+            book_title = book_title[0][0] if book_title else filename
+
+            book_author = book.get_metadata('DC', 'creator')
+            book_author = book_author[0][0] if book_author else 'Unknown'
+
+            print(f"📖 EPUB: {book_title} by {book_author}")
+
+            # Extract text from all document items
+            chapters = []
+            chapter_count = 0
+
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    html_content = item.get_content()
+                    soup = BeautifulSoup(html_content, 'html.parser')
+
+                    # Extract text from paragraphs
+                    text_parts = []
+                    for tag in ['p', 'div', 'h1', 'h2', 'h3', 'h4']:
+                        for element in soup.find_all(tag):
+                            text = element.get_text(' ', strip=True)
+                            if text and len(text) > 5:
+                                text_parts.append(text)
+
+                    chapter_text = '\n\n'.join(text_parts)
+
+                    # Only include substantial chapters
+                    if len(chapter_text) > 100:
+                        chapter_count += 1
+                        chapters.append(f"--- Chapter {chapter_count} ---\n\n{chapter_text}")
+
+            content = '\n\n'.join(chapters)
+
+            if not content.strip():
+                content = "[EPUB processed but no text content extracted]"
+                print(f"⚠️ Warning: No text extracted from EPUB {filename}")
+            else:
+                print(f"✅ Extracted {len(content)} characters from {chapter_count} chapters")
+
+            return content
+
+        except ImportError:
+            # Fallback to UnstructuredEPubLoader
+            print("⚠️ ebooklib not available, trying UnstructuredEPubLoader...")
+            from langchain_community.document_loaders import UnstructuredEPubLoader
+
+            loader = UnstructuredEPubLoader(temp_path, mode="single")
+            docs = loader.load()
+            content = "\n\n".join([doc.page_content for doc in docs])
+
+            if not content.strip():
+                content = "[EPUB processed but no text content extracted]"
+            else:
+                print(f"✅ Extracted {len(content)} characters from EPUB (unstructured)")
+
+            return content
+
+    except Exception as e:
+        print(f"❌ Error extracting EPUB content: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"[EPUB file: {filename} - extraction failed: {str(e)}]"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 @router.delete("/all")
