@@ -1,6 +1,6 @@
 """
 API routes for conversational chat with memory.
-Now supports chapter-based spoiler filtering and strict response validation.
+Supports simplified spoiler filtering with optional reference material.
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -21,6 +21,7 @@ async def ask_conversational(
         user_id: Optional[str] = Query(None, description="User identifier"),
         document_id: Optional[int] = Query(None, description="Filter search to specific document"),
         max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter"),
+        include_reference: bool = Query(False, description="Include reference material when spoiler filter is active"),
         db: Session = Depends(get_db)
 ):
     """
@@ -29,7 +30,8 @@ async def ask_conversational(
 
     Spoiler Protection:
     - max_chapter=None (default): Search entire book
-    - max_chapter=15: Only search chapters 1-15 plus reference material
+    - max_chapter=15: Only search chapters 1-15
+    - include_reference=True: Also search appendices/glossary
     """
     from app.services.enhanced_rag_service import enhanced_rag_service
 
@@ -48,13 +50,13 @@ async def ask_conversational(
         session_id=session_id,
         user_id=user_id,
         document_id=document_id,
-        max_chapter=max_chapter
+        max_chapter=max_chapter,
+        include_reference=include_reference
     )
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
 
-    # FastAPI automatically validates this dict against ConversationResponse
     return result
 
 

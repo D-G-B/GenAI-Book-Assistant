@@ -1,6 +1,6 @@
 """
 Conversational memory system for context-aware conversations.
-Now supports chapter-based spoiler filtering.
+Supports simplified spoiler filtering with optional reference material.
 """
 
 from typing import List, Dict, Any, Optional
@@ -84,8 +84,7 @@ class ConversationMemoryManager:
 
         memory = self.create_memory(k=5)
 
-        # 1. Condense Question Prompt
-        # This uses chat history to resolve pronouns (e.g., "Who is he?" -> "Who is Paul?")
+        # Condense Question Prompt - resolves pronouns using chat history
         condense_question_template = """
 Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
 IT IS VITAL TO ensure you resolve any pronouns (he, she, it, they, his, her) to the specific characters, places, or objects mentioned in the chat history.
@@ -99,16 +98,15 @@ Standalone Question:"""
 
         condense_question_prompt = PromptTemplate.from_template(condense_question_template)
 
-        # 2. Answer Generation Prompt (Custom Persona)
-        # This takes the Standalone Question + Context and generates the answer
+        # Answer Generation Prompt
         qa_template = """You are an expert Reading Companion and Lorekeeper. 
 Your goal is to answer the user's question based ONLY on the context provided below.
 
 Rules:
-1. If the answer is not in the context, say "I don't know based on the current chapters."
+1. If the answer is not in the context, say "I don't know based on the available chapters."
 2. Do not make up facts or use outside knowledge.
 3. Be helpful but concise.
-4. If the context contains spoilers (events from later chapters), warn the user.
+4. If the context is from reference material (appendix, glossary), mention that.
 
 Context:
 {context}
@@ -122,13 +120,13 @@ Answer:"""
             input_variables=["context", "question"]
         )
 
-        # 3. Create the Chain
+        # Create the Chain
         chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
             retriever=retriever,
             memory=memory,
             condense_question_prompt=condense_question_prompt,
-            combine_docs_chain_kwargs={'prompt': QA_PROMPT},  # <--- Injected Here
+            combine_docs_chain_kwargs={'prompt': QA_PROMPT},
             return_source_documents=True,
             verbose=True
         )
@@ -150,7 +148,8 @@ class ContextAwareRAG:
         session_id: str,
         user_id: Optional[str] = None,
         document_id: Optional[int] = None,
-        max_chapter: Optional[int] = None
+        max_chapter: Optional[int] = None,
+        include_reference: bool = False
     ) -> Dict[str, Any]:
         """
         Ask a question with conversational context.
@@ -161,6 +160,7 @@ class ContextAwareRAG:
             user_id: Optional user identifier
             document_id: Optional document filter
             max_chapter: Optional spoiler filter (None = full book)
+            include_reference: Include reference material when spoiler filter is on
         """
 
         if not question.strip():
@@ -176,15 +176,15 @@ class ContextAwareRAG:
             session = self.memory_manager.get_or_create_session(session_id, user_id)
 
             # Create chain key that includes all filters
-            # This ensures separate chains for different filter combinations
-            chain_key = f"{session_id}_{document_id}_{max_chapter}"
+            chain_key = f"{session_id}_{document_id}_{max_chapter}_{include_reference}"
 
             if chain_key not in self.active_chains:
                 # Get retriever with filters
                 retriever = self.base_rag.vector_store_manager.get_retriever(
                     k=4,
                     document_id=document_id,
-                    max_chapter=max_chapter
+                    max_chapter=max_chapter,
+                    include_reference=include_reference
                 )
 
                 if retriever is None:
@@ -196,6 +196,8 @@ class ContextAwareRAG:
                     filter_info.append(f"doc {document_id}")
                 if max_chapter is not None:
                     filter_info.append(f"ch 1-{max_chapter}")
+                    if include_reference:
+                        filter_info.append("+ refs")
 
                 if filter_info:
                     print(f"💬 Conversational search with filters: {', '.join(filter_info)}")
@@ -227,10 +229,14 @@ class ContextAwareRAG:
 
                 chapter_num = doc.metadata.get('chapter_number')
                 chapter_title = doc.metadata.get('chapter_title')
+                is_ref = doc.metadata.get('is_reference', False)
+
                 if chapter_title:
                     source_info['chapter_title'] = chapter_title
                 if chapter_num:
                     source_info['chapter_number'] = chapter_num
+                if is_ref:
+                    source_info['is_reference'] = True
 
                 sources.append(source_info)
 
@@ -246,7 +252,8 @@ class ContextAwareRAG:
                 "context_used": len(session.messages) > 2,
                 "filtered_to_document": document_id,
                 "spoiler_filter_active": max_chapter is not None,
-                "max_chapter": max_chapter
+                "max_chapter": max_chapter,
+                "include_reference": include_reference
             }
 
         except Exception as e:

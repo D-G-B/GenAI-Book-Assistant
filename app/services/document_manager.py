@@ -5,9 +5,15 @@ Document Manager Service
 Coordinates the lifecycle of documents across the Database, Vector Store, and File Manifest.
 This service handles:
 1. Document Ingestion: processing text, PDF, and EPUB content.
-2. Structure Analysis: Automatically detecting chapters, prologues, and epilogues.
-3. Chunking: Splitting text into semantic units with metadata (chapter numbers) for spoiler protection.
+2. Structure Analysis: Automatically detecting chapters via content scanning.
+3. Chunking: Splitting text into semantic units with chapter_number for spoiler protection.
 4. Synchronization: Ensuring the SQL DB, Vector DB, and JSON Manifest stay in sync.
+
+SIMPLIFIED SPOILER MODEL:
+- chapter_number: Integer (1, 2, 3...) for story chapters, None for reference material
+- is_reference: Boolean - True for appendices, glossary, terminology, etc.
+- Spoiler filter: Only return chunks where chapter_number <= max_chapter
+- Reference toggle: Optionally include chunks where is_reference=True
 """
 
 from typing import List, Dict, Any, Optional
@@ -59,7 +65,7 @@ class DocumentManager:
         print("✅ Document Manager initialized")
 
     # =========================================================================
-    # MANIFEST MANAGEMENT
+    # MANIFEST MANAGEMENT (FIXED - now preserves full metadata)
     # =========================================================================
 
     def _load_manifest(self):
@@ -69,23 +75,36 @@ class DocumentManager:
                 with open(self.manifest_path, 'r') as f:
                     data = json.load(f)
 
+                # NEW FORMAT: full metadata preserved
+                if 'documents' in data:
+                    self.processed_documents = {
+                        int(k): v for k, v in data['documents'].items()
+                    }
+                    print(f"📋 Loaded manifest: {len(self.processed_documents)} documents (full metadata)")
+                # LEGACY FORMAT: just IDs (migrate to new format)
+                elif 'processed_document_ids' in data:
                     processed_ids = data.get('processed_document_ids', [])
                     for doc_id in processed_ids:
                         self.processed_documents[doc_id] = {
-                            'loaded_from_manifest': True
+                            'migrated_from_legacy': True,
+                            'chunk_count': 0,
+                            'total_chapters': None
                         }
+                    print(f"📋 Loaded legacy manifest: {len(self.processed_documents)} documents (needs rebuild for metadata)")
 
-                    print(f"📋 Loaded manifest: {len(self.processed_documents)} documents")
             except Exception as e:
                 print(f"⚠️ Could not load manifest: {e}")
 
     def _save_manifest(self):
-        """Save the current state of processed documents to disk."""
+        """Save the current state of processed documents to disk (FULL METADATA)."""
         try:
             self.manifest_path.parent.mkdir(exist_ok=True)
 
             manifest_data = {
-                'processed_document_ids': list(self.processed_documents.keys()),
+                'version': 2,  # New format version
+                'documents': {
+                    str(k): v for k, v in self.processed_documents.items()
+                },
                 'last_updated': datetime.now().isoformat(),
                 'total_documents': len(self.processed_documents)
             }
@@ -93,7 +112,7 @@ class DocumentManager:
             with open(self.manifest_path, 'w') as f:
                 json.dump(manifest_data, f, indent=2)
 
-            print(f"📋 Manifest saved: {len(self.processed_documents)} documents")
+            print(f"📋 Manifest saved: {len(self.processed_documents)} documents (full metadata)")
         except Exception as e:
             print(f"⚠️ Failed to save manifest: {e}")
 
@@ -108,13 +127,6 @@ class DocumentManager:
     async def add_document(self, db: Session, document_id: int) -> bool:
         """
         Main Entry Point: Add and process a document.
-
-        1. Checks for soft-deleted status (restores if found).
-        2. Checks if already processed.
-        3. Fetches content from SQL Database.
-        4. Detects structure and chunks content.
-        5. Adds chunks to Vector Store.
-        6. Updates Manifest.
         """
         # 1. Restore if previously soft-deleted
         if self.vector_store_manager.is_deleted(document_id):
@@ -125,20 +137,22 @@ class DocumentManager:
 
             db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
             if db_doc:
-                self.processed_documents[document_id] = {
-                    'title': db_doc.title,
-                    'filename': db_doc.filename,
-                    'restored_at': datetime.now().isoformat()
-                }
+                # Preserve existing metadata if available
+                existing = self.processed_documents.get(document_id, {})
+                existing['restored_at'] = datetime.now().isoformat()
+                self.processed_documents[document_id] = existing
                 self._save_manifest()
 
             print(f"✅ Document {document_id} restored")
             return True
 
-        # 2. Skip if already active
+        # 2. Skip if already active (but check if metadata is complete)
         if self.is_processed(document_id):
-            print(f"⏭️  Document {document_id} already processed, skipping")
-            return True
+            existing = self.processed_documents.get(document_id, {})
+            # If we have real metadata, skip; if migrated from legacy, allow reprocess
+            if not existing.get('migrated_from_legacy'):
+                print(f"⏭️  Document {document_id} already processed, skipping")
+                return True
 
         try:
             # 3. Fetch from DB
@@ -151,11 +165,11 @@ class DocumentManager:
             print(f"📄 Processing: {db_doc.title} ({db_doc.filename})")
 
             # Check for extraction errors
-            if db_doc.content.startswith('[') and 'extraction failed' in db_doc.content:
+            if db_doc.content.startswith('[') and 'extraction failed' in db_doc.content.lower():
                 print(f"⚠️ Skipping document with failed extraction")
                 return False
 
-            # 4. Process and Chunk (Structure Detection happens here)
+            # 4. Process and Chunk
             chunks = await self._process_and_chunk(db_doc)
 
             if not chunks:
@@ -171,36 +185,33 @@ class DocumentManager:
                 print(f"❌ Failed to add chunks to vector store")
                 return False
 
-            # 6. Calculate True Max Chapter for Slider
-            # We filter for 'body' sections that have a valid number.
-            # This ensures the slider goes to the *highest* chapter (e.g. 60),
-            # not just the *count* of chapters (which might be lower if some are skipped).
+            # 6. Calculate max chapter from body chunks
             body_chapters = [
                 doc.metadata['chapter_number']
                 for doc in chunks
-                if doc.metadata.get('section_type') == 'body'
-                and doc.metadata.get('chapter_number') is not None
+                if doc.metadata.get('chapter_number') is not None
+                and not doc.metadata.get('is_reference', False)
             ]
 
-            true_max_chapter = max(body_chapters) if body_chapters else 0
+            max_chapter = max(body_chapters) if body_chapters else 0
 
-            # Fallback: If regex failed but chunks exist, use chunk count estimate or 50
-            if true_max_chapter == 0 and len(chunks) > 0:
-                true_max_chapter = 1
+            # Count reference chunks
+            reference_chunks = sum(1 for doc in chunks if doc.metadata.get('is_reference', False))
 
-            # 7. Update Manifest
+            # 7. Update Manifest with FULL metadata
             self.processed_documents[document_id] = {
                 'title': db_doc.title,
                 'filename': db_doc.filename,
                 'chunk_count': len(chunks),
-                'total_chapters': true_max_chapter,
+                'total_chapters': max_chapter,
+                'reference_chunks': reference_chunks,
                 'processed_at': datetime.now().isoformat()
             }
 
             self._save_manifest()
 
             print(f"✅ Document {document_id} fully processed and synced")
-            print(f"   📖 Max Chapter Detected: {true_max_chapter}")
+            print(f"   📖 Max Chapter: {max_chapter}, Reference chunks: {reference_chunks}")
             return True
 
         except Exception as e:
@@ -210,193 +221,107 @@ class DocumentManager:
             return False
 
     # =========================================================================
-    # STRUCTURE DETECTION & CHUNKING LOGIC
+    # CHAPTER DETECTION (IMPROVED)
     # =========================================================================
 
-    async def _process_and_chunk(self, db_doc: LoreDocument) -> List[Document]:
+    def _detect_chapters_in_content(self, content: str) -> List[Dict[str, Any]]:
         """
-        Analyzes document content to detect its structure (Chapters, Parts, etc.).
-        Decides whether to use Structured Chunking (for spoiler protection) or
-        Standard Chunking (flat text).
+        Scan content to find chapter markers and their positions.
+        Returns list of: {'start': int, 'title': str, 'chapter_number': int|None, 'is_reference': bool}
         """
-        base_metadata = {
-            'document_id': db_doc.id,
-            'document_title': db_doc.title,
-            'source_type': db_doc.source_type or 'text'
-        }
+        chapters = []
 
-        content = db_doc.content
-
-        # Define Regex Patterns for Universal Structure Detection
-        # We look for at least 2 matches to confirm a pattern is valid.
+        # Patterns to find chapter markers (order matters - more specific first)
         patterns = [
-            # Pattern A: Test/Custom format (e.g. === Chapter 1 ===)
-            r'===\s*(.+?)\s*===',
+            # === Section/Chapter markers (from EPUB extraction)
+            (r'===\s*(?:Chapter\s+)?(\d+)\s*===', 'numbered'),
+            (r'===\s*(.+?)\s*===', 'titled'),
 
-            # Pattern B: Standard headers (Chapter 1, Chapter One, Chapter IV)
-            # (?im) flags enable Case-Insensitive and Multiline matching
-            r'((?im)^chapter\s+[\d\w]+.*?$)',
+            # Standard chapter headers
+            (r'^Chapter\s+(\d+)\b', 'numbered'),
+            (r'^CHAPTER\s+(\d+)\b', 'numbered'),
+            (r'^Chapter\s+(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|Twenty|Thirty|Forty|Fifty)\b', 'word'),
+            (r'^Chapter\s+([IVXLC]+)\b', 'roman'),
 
-            # Pattern C: Major Divisions (Part I, Book One)
-            r'((?im)^part\s+[\d\w]+.*?$)',
-            r'((?im)^book\s+[\d\w]+.*?$)',
-
-            # Pattern D: Explicit Special Sections (Prologue, Epilogue only lines)
-            r'((?im)^(?:prologue|epilogue|interlude|preface|introduction).*?$)'
+            # Book divisions (Dune-style)
+            (r'^Book\s+(?:One|Two|Three|Four|Five|I|II|III|IV|V)\s*[-:]\s*(.+)$', 'book_division'),
         ]
 
-        selected_pattern = None
-
-        # Iterate patterns to find the best fit for this document
-        for pattern in patterns:
-            matches = re.findall(pattern, content)
-            # Threshold: If we see at least 2 headers, we assume structure exists
-            if len(matches) >= 2:
-                print(f"   📖 Detected structure: {len(matches)} sections using pattern '{pattern}'")
-                selected_pattern = pattern
-                break
-
-        # Branch 1: Structure Detected -> Use Smart Chunking
-        if selected_pattern:
-            return self._chunk_structured_content(content, base_metadata, selected_pattern)
-
-        # Branch 2: No Structure -> Use Fallback Chunking
-        # Note: Spoiler protection will likely be ineffective here (all content is visible)
-        print("   ⚠️ No chapter structure detected, using standard chunking")
-        try:
-            initial_docs = self.document_processor.process_content(
-                content, db_doc.filename, base_metadata
-            )
-        except Exception as e:
-            # Emergency fallback if processor fails
-            if len(content.strip()) > 20:
-                initial_docs = [Document(page_content=content, metadata=base_metadata)]
-            else:
-                return []
-
-        if not initial_docs:
-            return []
-
-        return self._chunk_documents(initial_docs)
-
-    def _chunk_structured_content(self, content: str, base_metadata: Dict[str, Any], chapter_pattern: str) -> List[Document]:
-        """
-        Splits content by the detected chapter pattern and assigns metadata.
-        Uses 'section_type' (frontmatter, body, backmatter) for robust spoiler logic.
-        """
-        final_chunks = []
-
-        # re.split with capturing groups returns [text_before, header1, text1, header2, text2...]
-        parts = re.split(chapter_pattern, content)
-
-        i = 0
-
-        # Handle Frontmatter (text before the first header)
-        if parts and parts[0].strip():
-            intro_chunks = self._create_chunks(
-                parts[0].strip(), base_metadata,
-                section_type='frontmatter',
-                chapter_number=0,
-                chapter_title="Frontmatter",
-                is_reference=False
-            )
-            final_chunks.extend(intro_chunks)
-            i = 1
-        else:
-            i = 1
-
-        # Iterate through (Header, Content) pairs
-        while i < len(parts) - 1:
-            chapter_title = parts[i].strip()
-            chapter_content = parts[i + 1].strip() if i + 1 < len(parts) else ""
-
-            # Skip empty sections (often caused by double line breaks)
-            if not chapter_content or len(chapter_content) < 50:
-                i += 2
-                continue
-
-            # --- SMART SECTION LOGIC ---
-            title_lower = chapter_title.lower()
-            current_section_type = 'body'
-            current_chapter_num = None
-
-            # Rule 1: Backmatter (Dangerous Spoilers)
-            # Epilogues, Afterwords, Appendices are always spoilers.
-            if any(x in title_lower for x in ['epilogue', 'afterword', 'appendix', 'glossary']):
-                current_section_type = 'backmatter'
-                current_chapter_num = None # Number is irrelevant, always hidden if spoiler mode is ON
-
-            # Rule 2: Frontmatter (Always Safe)
-            # Prologues, Intros are safe to read anytime.
-            elif any(x in title_lower for x in ['prologue', 'introduction', 'preface']):
-                current_section_type = 'frontmatter'
-                current_chapter_num = 0
-
-            # Rule 3: Body Chapters (Filtered by Slider)
-            else:
-                current_section_type = 'body'
-                current_chapter_num = self._extract_chapter_number(chapter_title)
-
-                # Fallback: just increment or use 0 if we can't parse the number
-                if current_chapter_num is None:
-                    current_chapter_num = 0
-
-            # Check if this is a glossary/appendix (legacy flag, kept for compatibility)
-            is_reference = current_section_type == 'backmatter'
-
-            # Generate chunks for this section
-            chapter_chunks = self._create_chunks(
-                chapter_content, base_metadata,
-                section_type=current_section_type,
-                chapter_number=current_chapter_num,
-                chapter_title=chapter_title,
-                is_reference=is_reference
-            )
-            final_chunks.extend(chapter_chunks)
-            i += 2
-
-        return final_chunks
-
-    def _extract_chapter_number(self, title: str) -> Optional[int]:
-        """
-        Extracts chapter number from a title string using multiple strategies.
-        """
-        title_lower = title.lower()
-
-        # Strategy 1: Standard Patterns (Digits)
-        patterns = [
-            r'(?:chapter|part|book|ch\.?)\s*(\d+)',
-            r'^(\d+)\.',
-            r'^(\d+)\s*[-–—]',
+        # Reference section markers
+        reference_patterns = [
+            r'(?:^|\n)(?:Appendix|APPENDIX)\s*[IVXLC\d]*\s*[-:]?\s*(.+)?',
+            r'(?:^|\n)(?:Glossary|GLOSSARY|Terminology|TERMINOLOGY)',
+            r'(?:^|\n)(?:Afterword|AFTERWORD|Epilogue|EPILOGUE)',
+            r'(?:^|\n)(?:Notes|NOTES|Bibliography|BIBLIOGRAPHY)',
+            r'(?:^|\n)(?:Cartographic|CARTOGRAPHIC|Map|MAP)',
+            r'(?:^|\n)(?:About the Author|ABOUT THE AUTHOR)',
         ]
 
-        for pattern in patterns:
-            match = re.search(pattern, title_lower)
-            if match:
-                return int(match.group(1))
-
-        # Strategy 2: Roman Numerals
-        roman_pattern = r'(?:chapter|part|book)\s+([ivxlc]+)(?:\s|$|:)'
-        match = re.search(roman_pattern, title_lower)
-        if match:
-            return self._roman_to_int(match.group(1).upper())
-
-        # Strategy 3: Word Numbers
+        # Word to number mapping
         word_to_num = {
             'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
             'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
             'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
             'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
-            'nineteen': 19, 'twenty': 20
+            'nineteen': 19, 'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50
         }
-        for word, num in word_to_num.items():
-            if f'chapter {word}' in title_lower:
-                return num
 
-        return None
+        # First, find all chapter markers
+        found_positions = set()
+
+        for pattern, pattern_type in patterns:
+            for match in re.finditer(pattern, content, re.MULTILINE | re.IGNORECASE):
+                start = match.start()
+
+                # Skip if we already found something at this position
+                if any(abs(start - pos) < 20 for pos in found_positions):
+                    continue
+
+                found_positions.add(start)
+                title = match.group(0).strip()
+                chapter_num = None
+
+                if pattern_type == 'numbered':
+                    chapter_num = int(match.group(1))
+                elif pattern_type == 'word':
+                    word = match.group(1).lower()
+                    chapter_num = word_to_num.get(word)
+                elif pattern_type == 'roman':
+                    chapter_num = self._roman_to_int(match.group(1).upper())
+                elif pattern_type == 'book_division':
+                    # Book divisions aren't chapters, mark as structural
+                    chapter_num = None
+
+                chapters.append({
+                    'start': start,
+                    'title': title,
+                    'chapter_number': chapter_num,
+                    'is_reference': False
+                })
+
+        # Find reference sections
+        for pattern in reference_patterns:
+            for match in re.finditer(pattern, content, re.MULTILINE | re.IGNORECASE):
+                start = match.start()
+
+                if any(abs(start - pos) < 20 for pos in found_positions):
+                    continue
+
+                found_positions.add(start)
+                chapters.append({
+                    'start': start,
+                    'title': match.group(0).strip(),
+                    'chapter_number': None,
+                    'is_reference': True
+                })
+
+        # Sort by position
+        chapters.sort(key=lambda x: x['start'])
+
+        return chapters
 
     def _roman_to_int(self, s: str) -> Optional[int]:
-        """Helper to convert standard Roman numerals to integers."""
+        """Convert Roman numerals to integer."""
         rom_val = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100}
         int_val = 0
         for i in range(len(s)):
@@ -406,18 +331,80 @@ class DocumentManager:
                 int_val += rom_val.get(s[i], 0)
         return int_val if int_val > 0 else None
 
-    def _create_chunks(
-            self,
-            content: str,
-            base_metadata: Dict[str, Any],
-            section_type: str,
-            chapter_number: Optional[int],
-            chapter_title: str,
-            is_reference: bool = False
+    # =========================================================================
+    # PROCESSING & CHUNKING
+    # =========================================================================
+
+    async def _process_and_chunk(self, db_doc: LoreDocument) -> List[Document]:
+        """
+        Process document content and create chunks with chapter metadata.
+        """
+        base_metadata = {
+            'document_id': db_doc.id,
+            'document_title': db_doc.title,
+            'source_type': db_doc.source_type or 'text'
+        }
+
+        content = db_doc.content
+
+        # Detect chapter structure
+        chapters = self._detect_chapters_in_content(content)
+
+        if len(chapters) >= 2:
+            print(f"   📖 Detected {len(chapters)} sections in content")
+            return self._chunk_with_chapters(content, chapters, base_metadata)
+        else:
+            print("   ⚠️ No chapter structure detected, using flat chunking")
+            return self._chunk_flat(content, base_metadata)
+
+    def _chunk_with_chapters(
+        self,
+        content: str,
+        chapters: List[Dict[str, Any]],
+        base_metadata: Dict[str, Any]
     ) -> List[Document]:
         """
-        Splits a single section/chapter into smaller vector-ready chunks.
-        Attaches 'section_type' for robust filtering.
+        Chunk content using detected chapter boundaries.
+        """
+        final_chunks = []
+
+        # Handle content before first chapter (frontmatter)
+        if chapters and chapters[0]['start'] > 100:
+            frontmatter = content[:chapters[0]['start']].strip()
+            if len(frontmatter) > 50:
+                chunks = self._create_chunks(
+                    frontmatter, base_metadata,
+                    chapter_number=None,
+                    chapter_title="Frontmatter",
+                    is_reference=False
+                )
+                final_chunks.extend(chunks)
+
+        # Process each chapter
+        for i, chapter in enumerate(chapters):
+            start = chapter['start']
+            end = chapters[i + 1]['start'] if i + 1 < len(chapters) else len(content)
+
+            chapter_content = content[start:end].strip()
+
+            # Skip very short sections
+            if len(chapter_content) < 100:
+                continue
+
+            chunks = self._create_chunks(
+                chapter_content, base_metadata,
+                chapter_number=chapter['chapter_number'],
+                chapter_title=chapter['title'],
+                is_reference=chapter['is_reference']
+            )
+            final_chunks.extend(chunks)
+
+        return final_chunks
+
+    def _chunk_flat(self, content: str, base_metadata: Dict[str, Any]) -> List[Document]:
+        """
+        Fallback: chunk content without chapter structure.
+        All chunks get chapter_number=1 so spoiler slider works (at minimum).
         """
         chunks = self.text_splitter.split_text(content)
         documents = []
@@ -430,10 +417,9 @@ class DocumentManager:
             chunk_metadata.update({
                 'chunk_index': i,
                 'total_chunks': len(chunks),
-                'chapter_title': chapter_title,
-                'chapter_number': chapter_number,
-                'section_type': section_type,  # Crucial for new filter logic
-                'is_reference_material': is_reference # Kept for legacy support
+                'chapter_number': 1,  # Default to chapter 1 for unstructured
+                'chapter_title': 'Content',
+                'is_reference': False
             })
 
             documents.append(Document(
@@ -443,41 +429,39 @@ class DocumentManager:
 
         return documents
 
-    def _chunk_documents(self, documents: List[Document]) -> List[Document]:
+    def _create_chunks(
+        self,
+        content: str,
+        base_metadata: Dict[str, Any],
+        chapter_number: Optional[int],
+        chapter_title: str,
+        is_reference: bool
+    ) -> List[Document]:
         """
-        Fallback chunker for documents where no chapter structure was detected.
-        Processes the text as a flat stream with 'body' type.
+        Split a section into smaller chunks with consistent metadata.
         """
-        final_documents = []
+        chunks = self.text_splitter.split_text(content)
+        documents = []
 
-        for document in documents:
-            if not document.page_content or not document.page_content.strip():
+        for i, chunk_text in enumerate(chunks):
+            if not chunk_text or len(chunk_text.strip()) < 20:
                 continue
 
-            if len(document.page_content.strip()) < 20:
-                continue
+            chunk_metadata = base_metadata.copy()
+            chunk_metadata.update({
+                'chunk_index': i,
+                'total_chunks': len(chunks),
+                'chapter_number': chapter_number,
+                'chapter_title': chapter_title,
+                'is_reference': is_reference
+            })
 
-            try:
-                chunks = self.text_splitter.split_text(document.page_content)
-            except Exception as e:
-                print(f"⚠️ Error splitting text: {e}")
-                continue
+            documents.append(Document(
+                page_content=chunk_text.strip(),
+                metadata=chunk_metadata
+            ))
 
-            for i, chunk in enumerate(chunks):
-                chunk_metadata = document.metadata.copy()
-                chunk_metadata.update({
-                    'chunk_index': i,
-                    'total_chunks': len(chunks),
-                    'section_type': 'body', # Default to body for unstructured text
-                    'chapter_number': None
-                })
-
-                final_documents.append(Document(
-                    page_content=chunk.strip(),
-                    metadata=chunk_metadata
-                ))
-
-        return final_documents
+        return documents
 
     # =========================================================================
     # DELETION & MAINTENANCE
@@ -543,32 +527,47 @@ class DocumentManager:
             if not all_db_docs:
                 print("⚠️ No documents in database to rebuild from")
                 self.vector_store_manager.vector_store = None
+                self.processed_documents.clear()
+                self._save_manifest()
                 return True
 
-            all_chunks = []
+            # Clear existing
+            self.vector_store_manager.clear_all()
+            self.processed_documents.clear()
 
+            # Reprocess each document
             for db_doc in all_db_docs:
                 if not db_doc.content:
                     continue
 
                 print(f"   Processing: {db_doc.title}")
                 chunks = await self._process_and_chunk(db_doc)
-                all_chunks.extend(chunks)
 
-            success = self.vector_store_manager.rebuild_index(all_chunks)
+                if chunks:
+                    self.vector_store_manager.add_documents(chunks)
 
-            if success:
-                self.processed_documents = {
-                    doc.id: {
-                        'title': doc.title,
-                        'filename': doc.filename,
+                    # Calculate stats
+                    body_chapters = [
+                        doc.metadata['chapter_number']
+                        for doc in chunks
+                        if doc.metadata.get('chapter_number') is not None
+                        and not doc.metadata.get('is_reference', False)
+                    ]
+                    max_chapter = max(body_chapters) if body_chapters else 0
+                    reference_chunks = sum(1 for doc in chunks if doc.metadata.get('is_reference', False))
+
+                    self.processed_documents[db_doc.id] = {
+                        'title': db_doc.title,
+                        'filename': db_doc.filename,
+                        'chunk_count': len(chunks),
+                        'total_chapters': max_chapter,
+                        'reference_chunks': reference_chunks,
                         'rebuilt_at': datetime.now().isoformat()
                     }
-                    for doc in all_db_docs
-                }
-                self._save_manifest()
 
-            return success
+            self._save_manifest()
+            print(f"✅ Index rebuilt: {len(self.processed_documents)} documents")
+            return True
 
         except Exception as e:
             print(f"❌ Error rebuilding index: {e}")
@@ -604,7 +603,8 @@ class DocumentManager:
                 'processed': status['processed'],
                 'soft_deleted': status['soft_deleted'],
                 'chunk_count': status['metadata'].get('chunk_count', 0),
-                'total_chapters': status['metadata'].get('total_chapters')
+                'total_chapters': status['metadata'].get('total_chapters'),
+                'reference_chunks': status['metadata'].get('reference_chunks', 0)
             })
 
         return result

@@ -1,6 +1,6 @@
 """
 Enhanced RAG Service - Focuses on RAG queries and answer generation.
-Now supports chapter-based spoiler filtering.
+Supports simplified spoiler filtering with optional reference material.
 """
 
 from typing import Dict, Any, Optional
@@ -82,7 +82,8 @@ class EnhancedRAGService:
         self,
         question: str,
         document_id: Optional[int] = None,
-        max_chapter: Optional[int] = None
+        max_chapter: Optional[int] = None,
+        include_reference: bool = False
     ) -> Dict[str, Any]:
         """
         Answer a question using RAG.
@@ -90,8 +91,8 @@ class EnhancedRAGService:
         Args:
             question: The question to answer
             document_id: Optional document ID to filter search
-            max_chapter: Optional max chapter for spoiler protection
-                        (None = no filter, show everything)
+            max_chapter: Optional max chapter for spoiler protection (None = no filter)
+            include_reference: Include reference material when spoiler filter is active
 
         Returns:
             Dictionary with answer, sources, and metadata
@@ -141,6 +142,8 @@ Answer:"""
                 filter_info.append(f"document {document_id}")
             if max_chapter is not None:
                 filter_info.append(f"chapters 1-{max_chapter}")
+                if include_reference:
+                    filter_info.append("+ reference material")
 
             if filter_info:
                 print(f"🔍 Searching with filters: {', '.join(filter_info)}")
@@ -151,7 +154,8 @@ Answer:"""
             retriever = self.vector_store_manager.get_retriever(
                 k=4,
                 document_id=document_id,
-                max_chapter=max_chapter
+                max_chapter=max_chapter,
+                include_reference=include_reference
             )
 
             if retriever is None:
@@ -164,7 +168,7 @@ Answer:"""
                 retriever=retriever,
                 chain_type_kwargs={"prompt": PROMPT, "verbose": True},
                 return_source_documents=True,
-                verbose = True
+                verbose=True
             )
 
             # Execute query
@@ -187,10 +191,14 @@ Answer:"""
                 # Add chapter info if available
                 chapter_num = doc.metadata.get('chapter_number')
                 chapter_title = doc.metadata.get('chapter_title')
+                is_ref = doc.metadata.get('is_reference', False)
+
                 if chapter_title:
                     source_info['chapter_title'] = chapter_title
                 if chapter_num:
                     source_info['chapter_number'] = chapter_num
+                if is_ref:
+                    source_info['is_reference'] = True
 
                 sources.append(source_info)
 
@@ -203,7 +211,8 @@ Answer:"""
                 "confidence": confidence,
                 "chunks_used": len(sources),
                 "spoiler_filter_active": max_chapter is not None,
-                "max_chapter": max_chapter
+                "max_chapter": max_chapter,
+                "include_reference": include_reference
             }
 
         except Exception as e:

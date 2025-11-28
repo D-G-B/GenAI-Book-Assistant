@@ -5,6 +5,7 @@ let currentMode = 'simple';
 let sessionId = null;
 let spoilerProtectionEnabled = false;
 let maxChapter = null;
+let includeReference = false;
 
 // ==========================================
 // UTILITY FUNCTIONS
@@ -56,24 +57,31 @@ function setMode(mode) {
     }
 }
 
+// ==========================================
+// SPOILER PROTECTION CONTROLS
+// ==========================================
+
 function toggleSpoilerProtection() {
     const toggle = document.getElementById('spoilerToggle');
     const slider = document.getElementById('chapterSlider');
     const sliderContainer = document.getElementById('sliderContainer');
+    const referenceContainer = document.getElementById('referenceContainer');
     const statusDisplay = document.getElementById('spoilerStatus');
 
     spoilerProtectionEnabled = toggle.checked;
 
     if (spoilerProtectionEnabled) {
-        // ENABLE
-        slider.removeAttribute('disabled');
+        // ENABLE spoiler protection
         slider.disabled = false;
-
         sliderContainer.style.opacity = '1.0';
         sliderContainer.style.pointerEvents = 'auto';
 
-        // Ensure valid starting value
-        let currentVal = parseInt(slider.value);
+        // Enable reference toggle
+        referenceContainer.style.opacity = '1.0';
+        referenceContainer.style.pointerEvents = 'auto';
+
+        // Set initial chapter value
+        let currentVal = parseInt(slider.value) || 10;
         let maxVal = parseInt(slider.max) || 50;
 
         if (currentVal <= 1) {
@@ -82,16 +90,16 @@ function toggleSpoilerProtection() {
         }
 
         maxChapter = currentVal;
-        statusDisplay.textContent = `ON - Reading Ch. 1-${maxChapter}`;
-        statusDisplay.classList.add('active');
-
-        updateChapterDisplay();
+        updateStatusDisplay();
     } else {
-        // DISABLE
-        slider.setAttribute('disabled', 'true');
+        // DISABLE spoiler protection
         slider.disabled = true;
         sliderContainer.style.opacity = '0.5';
         sliderContainer.style.pointerEvents = 'none';
+
+        // Disable reference toggle
+        referenceContainer.style.opacity = '0.5';
+        referenceContainer.style.pointerEvents = 'none';
 
         maxChapter = null;
         statusDisplay.textContent = 'OFF - Full Book';
@@ -102,13 +110,25 @@ function toggleSpoilerProtection() {
 function updateChapterDisplay() {
     const slider = document.getElementById('chapterSlider');
     const display = document.getElementById('chapterValue');
-    const statusDisplay = document.getElementById('spoilerStatus');
 
     const val = parseInt(slider.value) || 1;
     maxChapter = val;
-
     display.textContent = maxChapter;
-    statusDisplay.textContent = `ON - Reading Ch. 1-${maxChapter}`;
+
+    updateStatusDisplay();
+}
+
+function updateStatusDisplay() {
+    const statusDisplay = document.getElementById('spoilerStatus');
+    const refCheckbox = document.getElementById('includeReference');
+    includeReference = refCheckbox.checked;
+
+    let status = `ON - Ch. 1-${maxChapter}`;
+    if (includeReference) {
+        status += ' + refs';
+    }
+    statusDisplay.textContent = status;
+    statusDisplay.classList.add('active');
 }
 
 // ==========================================
@@ -131,6 +151,8 @@ async function uploadDocument() {
     if (title) formData.append('title', title);
 
     try {
+        addMessage('assistant', `Uploading "${file.name}"... This may take a moment for large files.`);
+
         const response = await fetch('/api/v1/documents/upload-file', {
             method: 'POST',
             body: formData
@@ -138,26 +160,17 @@ async function uploadDocument() {
 
         if (response.ok) {
             const doc = await response.json();
-            const processResponse = await fetch(`/api/v1/documents/${doc.id}/process`, {
-                method: 'POST'
-            });
-
-            if (processResponse.ok) {
-                addMessage('assistant', `Document "${doc.title}" uploaded and processed successfully.`);
-                titleInput.value = '';
-                fileInput.value = '';
-                loadDocuments();
-                loadStatus();
-            } else {
-                const errorData = await processResponse.json();
-                addMessage('assistant', `Processing failed: ${errorData.detail}`);
-            }
+            addMessage('assistant', `Document "${doc.title}" uploaded and processed successfully.`);
+            titleInput.value = '';
+            fileInput.value = '';
+            loadDocuments();
+            loadStatus();
         } else {
             const errorData = await response.json();
-            alert(`Upload failed: ${errorData.detail}`);
+            addMessage('assistant', `Upload failed: ${errorData.detail}`);
         }
     } catch (error) {
-        alert('Error: ' + error.message);
+        addMessage('assistant', `Error: ${error.message}`);
     }
 }
 
@@ -171,13 +184,16 @@ async function loadDocuments() {
 
         if (docs.length === 0) {
             listDiv.innerHTML = '<div style="color: #666; font-size: 0.85em; text-align: center; padding: 20px;">No documents yet</div>';
-            filterSelect.innerHTML = '<option value="">Search in: All Documents</option>';
+            filterSelect.innerHTML = '<option value="" data-chapters="50">Search in: All Documents</option>';
             return;
         }
 
-        // Sidebar List
+        // Sidebar List - show chapter count if available
         listDiv.innerHTML = docs.map(doc => {
-            const chapterInfo = doc.total_chapters ? ` (${doc.total_chapters} Chapters)` : '';
+            let chapterInfo = '';
+            if (doc.total_chapters && doc.total_chapters > 0) {
+                chapterInfo = ` (${doc.total_chapters} ch)`;
+            }
             return `
                 <div class="doc-item">
                     <div>
@@ -189,36 +205,35 @@ async function loadDocuments() {
             `;
         }).join('');
 
-        // Dropdown Options
+        // Dropdown - use total_chapters from API, fallback to 50
         filterSelect.innerHTML = '<option value="" data-chapters="50">Search in: All Documents</option>' +
             docs.map(doc => {
-                const chapters = doc.total_chapters || 50;
+                // Use total_chapters if available and > 0, otherwise default to 50
+                const chapters = (doc.total_chapters && doc.total_chapters > 0) ? doc.total_chapters : 50;
                 return `<option value="${doc.id}" data-chapters="${chapters}">${doc.title}</option>`;
             }).join('');
 
-        // Initial Trigger
-        triggerSliderUpdate(filterSelect);
-
-        // Change Listener
+        // Update slider when document selection changes
         filterSelect.onchange = function() {
-            triggerSliderUpdate(this);
+            updateSliderMax(this);
         };
+
+        // Initial update
+        updateSliderMax(filterSelect);
 
     } catch (error) {
         console.error('Failed to load documents:', error);
     }
 }
 
-// Helper to sync slider max with selected document
-function triggerSliderUpdate(selectElement) {
+function updateSliderMax(selectElement) {
     const selectedOption = selectElement.options[selectElement.selectedIndex];
-    // Default to 50 if no specific book selected
     const chapters = parseInt(selectedOption.getAttribute('data-chapters')) || 50;
 
     const slider = document.getElementById('chapterSlider');
+    const oldMax = parseInt(slider.max);
 
-    // CRITICAL FIX: Ensure the DOM updates the max attribute
-    slider.setAttribute('max', chapters);
+    // Update max
     slider.max = chapters;
 
     // Clamp current value if it exceeds new max
@@ -226,9 +241,10 @@ function triggerSliderUpdate(selectElement) {
         slider.value = chapters;
     }
 
-    // Refresh UI text immediately
-    if (spoilerProtectionEnabled) {
+    // If max changed significantly and spoiler is on, update display
+    if (spoilerProtectionEnabled && oldMax !== chapters) {
         updateChapterDisplay();
+        console.log(`Slider max updated: ${oldMax} → ${chapters}`);
     }
 }
 
@@ -266,21 +282,25 @@ async function askQuestion() {
     try {
         const filterSelect = document.getElementById('documentFilter');
         const documentId = filterSelect.value;
+        const refCheckbox = document.getElementById('includeReference');
+        includeReference = refCheckbox.checked;
+
+        // Build query params
+        const params = new URLSearchParams();
+        if (documentId) params.append('document_id', documentId);
+        if (spoilerProtectionEnabled && maxChapter) {
+            params.append('max_chapter', maxChapter);
+            params.append('include_reference', includeReference);
+        }
 
         let url, body;
-        const params = new URLSearchParams();
-
-        if (documentId) params.append('document_id', documentId);
-        if (spoilerProtectionEnabled && maxChapter) params.append('max_chapter', maxChapter);
-
-        const queryString = params.toString() ? `?${params.toString()}` : '';
 
         if (currentMode === 'conversational') {
             if (sessionId) params.set('session_id', sessionId);
             url = `/api/v1/conversation/ask?${params.toString()}`;
             body = {question: question};
         } else {
-            url = `/api/v1/chat/ask${queryString}`;
+            url = `/api/v1/chat/ask?${params.toString()}`;
             body = {question: question, max_chunks: 3};
         }
 
@@ -296,10 +316,17 @@ async function askQuestion() {
             addMessage('assistant', `Error: ${result.error}`);
         } else {
             let answer = result.answer;
-            // Updated Banner Text
+
+            // Add spoiler banner if active
             if (result.spoiler_filter_active) {
-                answer = `📖 *[Reading Ch. 1-${result.max_chapter}]*\n\n${answer}`;
+                let banner = `📖 *[Reading Ch. 1-${result.max_chapter}`;
+                if (result.include_reference) {
+                    banner += ' + reference material';
+                }
+                banner += ']*';
+                answer = `${banner}\n\n${answer}`;
             }
+
             addMessage('assistant', answer, result.sources);
         }
     } catch (error) {
@@ -316,21 +343,23 @@ function addMessage(role, content, sources = []) {
 
     messageDiv.className = role === 'user' ? 'message user' : 'message assistant';
 
+    // Format italic banner text
     const formattedContent = content.replace(/\*\[(.+?)\]\*/g, '<em style="color: #888; font-size: 0.85em;">[$1]</em>');
     let html = `<p>${formattedContent}</p>`;
 
+    // Format sources
     if (sources && sources.length > 0) {
         const sourceMap = sources.reduce((acc, source) => {
-            const key = source.chapter_title || source.document_title;
+            let key = source.chapter_title || source.document_title;
+            if (source.is_reference) {
+                key = `📚 ${key}`;
+            }
             if (!acc[key]) acc[key] = [];
             if (!acc[key].includes(source.chunk_index)) acc[key].push(source.chunk_index);
             return acc;
         }, {});
 
-        const sourceHtml = Object.keys(sourceMap).map(title => {
-            return `${title}`;
-        }).join(' • ');
-
+        const sourceHtml = Object.keys(sourceMap).map(title => title).join(' • ');
         html += `<div class="compact-sources">${sourceHtml}</div>`;
     }
 
@@ -338,6 +367,10 @@ function addMessage(role, content, sources = []) {
     messagesDiv.appendChild(messageDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
+
+// ==========================================
+// STATUS & INITIALIZATION
+// ==========================================
 
 async function loadStatus() {
     try {
@@ -370,6 +403,20 @@ async function loadStatus() {
     }
 }
 
+// Reference checkbox listener
+document.addEventListener('DOMContentLoaded', function() {
+    const refCheckbox = document.getElementById('includeReference');
+    if (refCheckbox) {
+        refCheckbox.addEventListener('change', function() {
+            includeReference = this.checked;
+            if (spoilerProtectionEnabled) {
+                updateStatusDisplay();
+            }
+        });
+    }
+});
+
+// Initial load
 loadDocuments();
 loadStatus();
 setInterval(loadStatus, 30000);

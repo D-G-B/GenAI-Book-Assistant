@@ -1,6 +1,6 @@
 """
 Pydantic schemas for Chat and Conversational APIs.
-Includes strict typing for simple Q&A and extended types for conversational memory.
+Includes simplified spoiler model with reference material toggle.
 """
 
 from pydantic import BaseModel
@@ -18,9 +18,9 @@ class ChatSource(BaseModel):
     document_title: str
     chunk_index: int
     similarity_score: float
-    # Essential for UI Citations (e.g. "Chapter 5")
     chapter_title: Optional[str] = None
     chapter_number: Optional[int] = None
+    is_reference: Optional[bool] = None  # True if from glossary/appendix
 
 class ChatResponse(BaseModel):
     """Standard response for Simple Q&A."""
@@ -29,9 +29,10 @@ class ChatResponse(BaseModel):
     confidence: float
     chunks_used: int
     error: Optional[str] = None
-    # Essential for UI Spoiler Banner
+    # Spoiler info
     spoiler_filter_active: bool = False
     max_chapter: Optional[int] = None
+    include_reference: Optional[bool] = None
 
 # --- Extended Models for Conversational Mode ---
 
@@ -45,7 +46,7 @@ class ConversationResponse(ChatResponse):
     context_used: bool
     filtered_to_document: Optional[int] = None
 
-# --- Database/History Models (Restored) ---
+# --- Database/History Models ---
 
 class ChatHistory(BaseModel):
     """Schema for reading chat history from the database."""

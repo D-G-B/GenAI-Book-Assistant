@@ -3,10 +3,11 @@ Vector Store Manager
 ====================
 
 Handles all interactions with the FAISS vector database.
-This includes:
-1. Persistence: Loading and saving the index to disk.
-2. Soft Deletion: Managing a 'deleted' list to hide documents without expensive rebuilding.
-3. Retrieval: Providing a powerful retriever with support for metadata filtering.
+
+SIMPLIFIED SPOILER MODEL:
+- Filter by chapter_number <= max_chapter
+- Optionally include reference material (is_reference=True)
+- No complex section_type logic
 """
 
 from typing import List, Dict, Any, Optional, Set
@@ -159,61 +160,68 @@ class VectorStoreManager:
 
     def get_retriever(
         self,
-        k: int = 8,  # Increased context window for better retrieval
+        k: int = 8,
         document_id: Optional[int] = None,
-        max_chapter: Optional[int] = None
+        max_chapter: Optional[int] = None,
+        include_reference: bool = False
     ):
         """
         Get a retriever with filtering support.
 
+        SIMPLIFIED SPOILER MODEL:
+        - max_chapter=None: Return all content (no spoiler filter)
+        - max_chapter=10: Return only chunks where chapter_number <= 10
+        - include_reference=True: Also include chunks where is_reference=True
+
         Args:
             k: Number of results to return
             document_id: Optional - filter to specific document
-            max_chapter: Optional - filter to chapters <= this number (spoiler protection)
+            max_chapter: Optional - max chapter for spoiler protection (None = no filter)
+            include_reference: If True, include reference material regardless of chapter filter
         """
         if self.vector_store is None:
             return None
 
         def filter_function(metadata: Dict[str, Any]) -> bool:
             """
-            Filter based on document_id, deleted status, and Section Type.
+            Simple filter: chapter number + optional reference material.
             """
             doc_id = metadata.get("document_id")
 
-            # 1. Filter out soft-deleted documents
+            # 1. Always filter out soft-deleted documents
             if doc_id in self.deleted_document_ids:
                 return False
 
             # 2. Filter to specific document if requested
-            if document_id is not None:
-                if doc_id != document_id:
-                    return False
+            if document_id is not None and doc_id != document_id:
+                return False
 
-            # 3. Spoiler Protection Filter
+            # 3. Spoiler Protection (only when max_chapter is set)
             if max_chapter is not None:
-                sec_type = metadata.get("section_type", "body") # Default to body
+                is_ref = metadata.get("is_reference", False)
                 ch_num = metadata.get("chapter_number")
 
-                # A. Always ALLOW Frontmatter (Prologue, Intro)
-                if sec_type == 'frontmatter':
+                # Option A: Include reference material if checkbox is checked
+                if include_reference and is_ref:
                     return True
 
-                # B. Always BLOCK Backmatter (Epilogue, Appendices)
-                # If spoiler mode is ON, these are hidden.
-                if sec_type == 'backmatter':
-                    return False
+                # Option B: Filter by chapter number
+                if ch_num is not None and ch_num <= max_chapter:
+                    return True
 
-                # C. Filter BODY by Chapter Number
-                if sec_type == 'body':
-                    # If regex failed to find a number, assume it's safe (or dangerous? Safe is better for UX)
-                    if ch_num is None:
-                        return True
-                    return ch_num <= max_chapter
+                # Option C: Allow chunks with no chapter number (frontmatter, etc)
+                # Only if they're not reference material (which we handle above)
+                if ch_num is None and not is_ref:
+                    return True
 
+                # Otherwise, block it (spoiler protection)
+                return False
+
+            # No spoiler filter active - return everything
             return True
 
         # Increase fetch_k when filtering to ensure we get enough results
-        fetch_k = k * 4 if (document_id or max_chapter) else k * 2
+        fetch_k = k * 4 if (document_id or max_chapter is not None) else k * 2
 
         search_kwargs = {
             "k": k,

@@ -1,6 +1,6 @@
 """
 FastAPI router for chat/question-answering endpoints.
-Now supports chapter-based spoiler filtering.
+Supports simplified spoiler filtering with optional reference material.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,14 +17,16 @@ async def ask_question(
     request: ChatRequest,
     db: Session = Depends(get_db),
     document_id: Optional[int] = Query(None, description="Filter search to specific document"),
-    max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter (None = full book)")
+    max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter (None = full book)"),
+    include_reference: bool = Query(False, description="Include reference material (glossary, appendix) when spoiler filter is active")
 ):
     """
     Ask a question about the uploaded documents.
 
     Spoiler Protection:
     - max_chapter=None (default): Search entire book, no spoiler filtering
-    - max_chapter=15: Only search chapters 1-15 plus reference material (glossaries, appendices)
+    - max_chapter=15: Only search chapters 1-15
+    - include_reference=True: Also search appendices/glossary when spoiler filter is on
     """
     from app.services.enhanced_rag_service import enhanced_rag_service
 
@@ -35,7 +37,8 @@ async def ask_question(
         result = await enhanced_rag_service.ask_question(
             request.question,
             document_id=document_id,
-            max_chapter=max_chapter
+            max_chapter=max_chapter,
+            include_reference=include_reference
         )
 
         if "error" in result:

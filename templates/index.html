@@ -57,6 +57,7 @@
                         </select>
                     </div>
 
+                    <!-- SIMPLIFIED SPOILER CONTROLS -->
                     <div class="spoiler-control" style="margin-top: 12px;">
                         <div class="spoiler-header">
                             <label class="spoiler-toggle">
@@ -65,12 +66,22 @@
                             </label>
                             <span class="spoiler-status" id="spoilerStatus">OFF - Full Book</span>
                         </div>
-                        <div class="spoiler-slider-container" id="sliderContainer" style="opacity: 0.5;">
+
+                        <!-- Chapter Slider -->
+                        <div class="spoiler-slider-container" id="sliderContainer" style="opacity: 0.5; pointer-events: none;">
                             <input type="range" id="chapterSlider" min="1" max="50" value="10"
                                    oninput="updateChapterDisplay()" disabled>
                             <div class="chapter-display">
                                 Reading up to: <strong>Chapter <span id="chapterValue">10</span></strong>
                             </div>
+                        </div>
+
+                        <!-- Reference Material Toggle -->
+                        <div class="reference-toggle-container" id="referenceContainer" style="margin-top: 8px; opacity: 0.5; pointer-events: none;">
+                            <label class="reference-toggle" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.85em;">
+                                <input type="checkbox" id="includeReference" style="width: 14px; height: 14px;">
+                                <span style="color: #888;">Include glossary &amp; appendices</span>
+                            </label>
                         </div>
                     </div>
 
