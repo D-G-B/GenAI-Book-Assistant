@@ -181,7 +181,7 @@ class ContextAwareRAG:
             if chain_key not in self.active_chains:
                 # Get retriever with filters
                 retriever = self.base_rag.vector_store_manager.get_retriever(
-                    k=4,
+                    k=8,
                     document_id=document_id,
                     max_chapter=max_chapter,
                     include_reference=include_reference

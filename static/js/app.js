@@ -349,17 +349,41 @@ function addMessage(role, content, sources = []) {
 
     // Format sources
     if (sources && sources.length > 0) {
-        const sourceMap = sources.reduce((acc, source) => {
-            let key = source.chapter_title || source.document_title;
+        // [FIX] Improved source mapping logic
+        const sourceLabels = sources.map(source => {
+            // 1. Check if it's a reference doc
             if (source.is_reference) {
-                key = `📚 ${key}`;
+                // Clean up title: remove "=== " and " ==="
+                const title = (source.chapter_title || "Reference").replace(/^===\s*|\s*===$/g, '');
+                return `📚 ${title}`;
             }
-            if (!acc[key]) acc[key] = [];
-            if (!acc[key].includes(source.chunk_index)) acc[key].push(source.chunk_index);
-            return acc;
-        }, {});
 
-        const sourceHtml = Object.keys(sourceMap).map(title => title).join(' • ');
+            // 2. Check if it has a chapter number (Preferred)
+            if (source.chapter_number) {
+                return `Ch. ${source.chapter_number}`;
+            }
+
+            // 3. Fallback: Title cleaning logic
+            if (source.chapter_title) {
+                // Remove "=== Section" or "=== Chapter" garbage to find hidden numbers
+                let cleanTitle = source.chapter_title
+                    .replace(/^===\s*(Section|Chapter)\s*/i, '')
+                    .replace(/^===\s*/, '')
+                    .replace(/\s*===$/, '');
+
+                // If the result is just a number, add "Ch."
+                if (!isNaN(cleanTitle) && cleanTitle.trim() !== '') {
+                    return `Ch. ${cleanTitle}`;
+                }
+                return cleanTitle;
+            }
+
+            return source.document_title;
+        });
+
+        // Deduplicate labels (e.g. don't show "Ch. 1, Ch. 1, Ch. 1")
+        const uniqueLabels = [...new Set(sourceLabels)];
+        const sourceHtml = uniqueLabels.join(' • ');
         html += `<div class="compact-sources">${sourceHtml}</div>`;
     }
 

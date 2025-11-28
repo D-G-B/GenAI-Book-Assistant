@@ -90,7 +90,8 @@ class DocumentManager:
                             'chunk_count': 0,
                             'total_chapters': None
                         }
-                    print(f"📋 Loaded legacy manifest: {len(self.processed_documents)} documents (needs rebuild for metadata)")
+                    print(
+                        f"📋 Loaded legacy manifest: {len(self.processed_documents)} documents (needs rebuild for metadata)")
 
             except Exception as e:
                 print(f"⚠️ Could not load manifest: {e}")
@@ -190,7 +191,7 @@ class DocumentManager:
                 doc.metadata['chapter_number']
                 for doc in chunks
                 if doc.metadata.get('chapter_number') is not None
-                and not doc.metadata.get('is_reference', False)
+                   and not doc.metadata.get('is_reference', False)
             ]
 
             max_chapter = max(body_chapters) if body_chapters else 0
@@ -231,19 +232,29 @@ class DocumentManager:
         """
         chapters = []
 
-        # Patterns to find chapter markers (order matters - more specific first)
+        # Patterns to find chapter markers
+        # ORDER MATTERS: The first pattern to match a region "wins".
         patterns = [
-            # === Section/Chapter markers (from EPUB extraction)
+            # 1. AUTHOR INTENT (Highest Priority)
+            # We look for what the author wrote first. If we find "Chapter 1",
+            # we will ignore any "=== Section ===" markers that appear nearby.
+            (r'^Chapter\s+(\d+)\b', 'numbered'),
+            (r'^CHAPTER\s+(\d+)\b', 'numbered'),
+            (r'^Chapter\s+(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|Twenty|Thirty|Forty|Fifty)\b',
+             'word'),
+            (r'^Chapter\s+([IVXLC]+)\b', 'roman'),
+
+            # 2. MACHINE ARTIFACTS (Fallback)
+            # We only use these if the Author patterns didn't find anything at this position.
+
+            # "If we can't find a real chapter title above, use the file section number, but keep it mathematically useful so the slider still works."
+            (r'===\s*Section\s+(\d+)\s*===', 'numbered'),
+
+            # Existing generic patterns
             (r'===\s*(?:Chapter\s+)?(\d+)\s*===', 'numbered'),
             (r'===\s*(.+?)\s*===', 'titled'),
 
-            # Standard chapter headers
-            (r'^Chapter\s+(\d+)\b', 'numbered'),
-            (r'^CHAPTER\s+(\d+)\b', 'numbered'),
-            (r'^Chapter\s+(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|Twenty|Thirty|Forty|Fifty)\b', 'word'),
-            (r'^Chapter\s+([IVXLC]+)\b', 'roman'),
-
-            # Book divisions (Dune-style)
+            # Book divisions
             (r'^Book\s+(?:One|Two|Three|Four|Five|I|II|III|IV|V)\s*[-:]\s*(.+)$', 'book_division'),
         ]
 
@@ -358,10 +369,10 @@ class DocumentManager:
             return self._chunk_flat(content, base_metadata)
 
     def _chunk_with_chapters(
-        self,
-        content: str,
-        chapters: List[Dict[str, Any]],
-        base_metadata: Dict[str, Any]
+            self,
+            content: str,
+            chapters: List[Dict[str, Any]],
+            base_metadata: Dict[str, Any]
     ) -> List[Document]:
         """
         Chunk content using detected chapter boundaries.
@@ -430,12 +441,12 @@ class DocumentManager:
         return documents
 
     def _create_chunks(
-        self,
-        content: str,
-        base_metadata: Dict[str, Any],
-        chapter_number: Optional[int],
-        chapter_title: str,
-        is_reference: bool
+            self,
+            content: str,
+            base_metadata: Dict[str, Any],
+            chapter_number: Optional[int],
+            chapter_title: str,
+            is_reference: bool
     ) -> List[Document]:
         """
         Split a section into smaller chunks with consistent metadata.
@@ -551,7 +562,7 @@ class DocumentManager:
                         doc.metadata['chapter_number']
                         for doc in chunks
                         if doc.metadata.get('chapter_number') is not None
-                        and not doc.metadata.get('is_reference', False)
+                           and not doc.metadata.get('is_reference', False)
                     ]
                     max_chapter = max(body_chapters) if body_chapters else 0
                     reference_chunks = sum(1 for doc in chunks if doc.metadata.get('is_reference', False))

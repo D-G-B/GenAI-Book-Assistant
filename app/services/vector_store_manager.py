@@ -209,10 +209,10 @@ class VectorStoreManager:
                 if ch_num is not None and ch_num <= max_chapter:
                     return True
 
-                # Option C: Allow chunks with no chapter number (frontmatter, etc)
-                # Only if they're not reference material (which we handle above)
-                if ch_num is None and not is_ref:
-                    return True
+                # Option C:
+                # ? not sure
+                if ch_num is None:
+                    return False
 
                 # Otherwise, block it (spoiler protection)
                 return False
@@ -220,11 +220,18 @@ class VectorStoreManager:
             # No spoiler filter active - return everything
             return True
 
+        # force more chunks
+        real_k = max(k, 20)
         # Increase fetch_k when filtering to ensure we get enough results
-        fetch_k = k * 4 if (document_id or max_chapter is not None) else k * 2
+        if max_chapter is not None:
+            fetch_k = k * 50  # Search top 60-100 chunks to find 3 valid ones
+        elif document_id:
+            fetch_k = k * 4
+        else:
+            fetch_k = k * 2
 
         search_kwargs = {
-            "k": k,
+            "k": real_k, # Use our forced high limit
             "fetch_k": fetch_k,
             "filter": filter_function
         }

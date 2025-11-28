@@ -114,8 +114,9 @@ class EnhancedRAGService:
 
         try:
             # Create prompt template
-            prompt_template = """You are an expert Reading Companion and Lorekeeper for complex Sci-Fi and Fantasy epics.
-Your goal is to help the user understand the world, remember characters, and track plotlines without inventing information.
+            # [FIX] Refined prompt to allow logical synthesis without being Dune-specific
+            prompt_template = """You are an expert Reading Companion and Lorekeeper.
+Your goal is to help the user understand the world, remember characters, and track plotlines.
 
 Context from the book/documents:
 {context}
@@ -123,11 +124,11 @@ Context from the book/documents:
 User's Question: {question}
 
 Instructions:
-1. **Role**: Act as a helpful guide. If asked "Who is X?", provide their identity, allegiance, and relation to the protagonist based on the context.
-2. **Terminology**: If technical terms (like 'Aes Sedai', 'Mentat', 'Cielcin') appear in the context, define them briefly if relevant to the answer.
-3. **Strict Grounding**: Only use information from the provided context. If the answer is not in the text, state: "I cannot find a reference to that in the current excerpt."
-4. **Spoilers**: Be cautious. Answer the specific question asked. Do not reveal major future plot twists unless explicitly asked.
-5. **Clarity**: Complex worlds have complex names. Be precise with spelling and relationships.
+1. **Role**: Act as a helpful guide. If asked "Who is X?", provide their identity, allegiance, and key relationships based on the context.
+2. **Terminology**: If unique or technical terms appear in the context, define them briefly if relevant to the answer.
+3. **Synthesis Allowed**: Base your answer *only* on the provided context, but **you may synthesize details** from multiple sections to form a complete answer (e.g., connecting family relationships mentioned in different places). Do not use outside knowledge.
+4. **Spoilers**: Answer the specific question asked. Do not reveal major future plot twists unless explicitly asked.
+5. **Clarity**: Be precise with spelling and relationships.
 
 Answer:"""
 
@@ -151,8 +152,10 @@ Answer:"""
                 print(f"🔍 Searching across all documents (no spoiler filter)")
 
             # Get retriever with filters
+            # [FIX] We call get_retriever here with k=20 to ensure we have enough context
+            # for the synthesis instruction to work effectively.
             retriever = self.vector_store_manager.get_retriever(
-                k=4,
+                k=20,
                 document_id=document_id,
                 max_chapter=max_chapter,
                 include_reference=include_reference
