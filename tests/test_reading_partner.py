@@ -3,7 +3,7 @@ Test Script for Reading Partner v2
 Tests: EPUB upload, chapter extraction, spoiler filtering, conversational mode
 
 Run from project root with server running:
-    uv run python tests/test_reading_partner_v2.py
+    uv run python tests/test_reading_partner.py
 
 Prerequisites:
     - Server running on localhost:8000

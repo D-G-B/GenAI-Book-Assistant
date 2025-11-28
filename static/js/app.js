@@ -1,19 +1,51 @@
+// ==========================================
+// STATE MANAGEMENT
+// ==========================================
 let currentMode = 'simple';
 let sessionId = null;
 let spoilerProtectionEnabled = false;
 let maxChapter = null;
 
+// ==========================================
+// UTILITY FUNCTIONS
+// ==========================================
+
 function generateSessionId() {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 }
 
+function resetConversation() {
+    if (!confirm("Start a new conversation? This will clear the current history and memory.")) {
+        return;
+    }
+
+    const messagesDiv = document.getElementById('messages');
+    messagesDiv.innerHTML = '';
+
+    if (currentMode === 'conversational') {
+        sessionId = generateSessionId();
+        const sessionDisplay = document.getElementById('sessionId');
+        if (sessionDisplay) {
+            sessionDisplay.textContent = sessionId.substr(0, 20) + '...';
+        }
+        addMessage('assistant', 'Started a new conversation session. I have forgotten our previous context.');
+    } else {
+        addMessage('assistant', 'Chat cleared. Ready for new questions.');
+    }
+}
+
+// ==========================================
+// MODE SWITCHING & UI CONTROL
+// ==========================================
+
 function setMode(mode) {
     currentMode = mode;
+
     document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelector(`.mode-btn[onclick*="'${mode}'"]`).classList.add('active');
 
     if (mode === 'conversational') {
-        sessionId = generateSessionId();
+        if (!sessionId) sessionId = generateSessionId();
         document.getElementById('sessionInfo').style.display = 'block';
         document.getElementById('sessionId').textContent = sessionId.substr(0, 20) + '...';
         addMessage('assistant', `Conversational mode enabled. I'll remember our conversation context.`);
@@ -33,17 +65,33 @@ function toggleSpoilerProtection() {
     spoilerProtectionEnabled = toggle.checked;
 
     if (spoilerProtectionEnabled) {
-        // Enable
+        // ENABLE
+        slider.removeAttribute('disabled');
         slider.disabled = false;
-        sliderContainer.style.opacity = '1.0';
 
-        maxChapter = parseInt(slider.value);
-        statusDisplay.textContent = `ON - Up to Ch. ${maxChapter}`;
+        sliderContainer.style.opacity = '1.0';
+        sliderContainer.style.pointerEvents = 'auto';
+
+        // Ensure valid starting value
+        let currentVal = parseInt(slider.value);
+        let maxVal = parseInt(slider.max) || 50;
+
+        if (currentVal <= 1) {
+            currentVal = Math.min(10, maxVal);
+            slider.value = currentVal;
+        }
+
+        maxChapter = currentVal;
+        statusDisplay.textContent = `ON - Reading Ch. 1-${maxChapter}`;
         statusDisplay.classList.add('active');
+
+        updateChapterDisplay();
     } else {
-        // Disable
+        // DISABLE
+        slider.setAttribute('disabled', 'true');
         slider.disabled = true;
-        sliderContainer.style.opacity = '0.5'; // Visual feedback
+        sliderContainer.style.opacity = '0.5';
+        sliderContainer.style.pointerEvents = 'none';
 
         maxChapter = null;
         statusDisplay.textContent = 'OFF - Full Book';
@@ -56,15 +104,20 @@ function updateChapterDisplay() {
     const display = document.getElementById('chapterValue');
     const statusDisplay = document.getElementById('spoilerStatus');
 
-    maxChapter = parseInt(slider.value);
+    const val = parseInt(slider.value) || 1;
+    maxChapter = val;
+
     display.textContent = maxChapter;
-    statusDisplay.textContent = `ON - Up to Ch. ${maxChapter}`;
+    statusDisplay.textContent = `ON - Reading Ch. 1-${maxChapter}`;
 }
+
+// ==========================================
+// DOCUMENT MANAGEMENT
+// ==========================================
 
 async function uploadDocument() {
     const titleInput = document.getElementById('docTitle');
     const fileInput = document.getElementById('fileInput');
-
     const title = titleInput.value.trim();
     const file = fileInput.files[0];
 
@@ -75,9 +128,7 @@ async function uploadDocument() {
 
     const formData = new FormData();
     formData.append('file', file);
-    if (title) {
-        formData.append('title', title);
-    }
+    if (title) formData.append('title', title);
 
     try {
         const response = await fetch('/api/v1/documents/upload-file', {
@@ -87,7 +138,6 @@ async function uploadDocument() {
 
         if (response.ok) {
             const doc = await response.json();
-
             const processResponse = await fetch(`/api/v1/documents/${doc.id}/process`, {
                 method: 'POST'
             });
@@ -100,11 +150,11 @@ async function uploadDocument() {
                 loadStatus();
             } else {
                 const errorData = await processResponse.json();
-                addMessage('assistant', `Document uploaded but processing failed: ${errorData.detail || 'Unknown error'}`);
+                addMessage('assistant', `Processing failed: ${errorData.detail}`);
             }
         } else {
             const errorData = await response.json();
-            alert(`Failed to upload document: ${errorData.detail || 'Unknown error'}`);
+            alert(`Upload failed: ${errorData.detail}`);
         }
     } catch (error) {
         alert('Error: ' + error.message);
@@ -125,36 +175,65 @@ async function loadDocuments() {
             return;
         }
 
+        // Sidebar List
         listDiv.innerHTML = docs.map(doc => {
-            const chapterInfo = doc.total_chapters ? ` (${doc.total_chapters} ch.)` : '';
+            const chapterInfo = doc.total_chapters ? ` (${doc.total_chapters} Chapters)` : '';
             return `
                 <div class="doc-item">
                     <div>
-                        <div class="doc-title">${doc.title}${chapterInfo}</div>
-                        <div class="doc-filename">${doc.filename}</div>
+                        <div class="doc-title" title="${doc.title}">${doc.title}${chapterInfo}</div>
+                        <div class="doc-filename" title="${doc.filename}">${doc.filename}</div>
                     </div>
                     <button class="delete-btn" onclick="deleteDocument(${doc.id})">Delete</button>
                 </div>
             `;
         }).join('');
 
-        filterSelect.innerHTML = '<option value="">Search in: All Documents</option>' +
-            docs.map(doc => `<option value="${doc.id}">${doc.title}</option>`).join('');
+        // Dropdown Options
+        filterSelect.innerHTML = '<option value="" data-chapters="50">Search in: All Documents</option>' +
+            docs.map(doc => {
+                const chapters = doc.total_chapters || 50;
+                return `<option value="${doc.id}" data-chapters="${chapters}">${doc.title}</option>`;
+            }).join('');
 
-        // Update slider max based on document chapters
-        const maxChapters = Math.max(...docs.map(d => d.total_chapters || 50));
-        if (maxChapters > 0) {
-            document.getElementById('chapterSlider').max = maxChapters;
-        }
+        // Initial Trigger
+        triggerSliderUpdate(filterSelect);
+
+        // Change Listener
+        filterSelect.onchange = function() {
+            triggerSliderUpdate(this);
+        };
 
     } catch (error) {
         console.error('Failed to load documents:', error);
     }
 }
 
+// Helper to sync slider max with selected document
+function triggerSliderUpdate(selectElement) {
+    const selectedOption = selectElement.options[selectElement.selectedIndex];
+    // Default to 50 if no specific book selected
+    const chapters = parseInt(selectedOption.getAttribute('data-chapters')) || 50;
+
+    const slider = document.getElementById('chapterSlider');
+
+    // CRITICAL FIX: Ensure the DOM updates the max attribute
+    slider.setAttribute('max', chapters);
+    slider.max = chapters;
+
+    // Clamp current value if it exceeds new max
+    if (parseInt(slider.value) > chapters) {
+        slider.value = chapters;
+    }
+
+    // Refresh UI text immediately
+    if (spoilerProtectionEnabled) {
+        updateChapterDisplay();
+    }
+}
+
 async function deleteDocument(id) {
     if (!confirm('Delete this document?')) return;
-
     try {
         const response = await fetch(`/api/v1/documents/${id}`, {method: 'DELETE'});
         if (response.ok) {
@@ -166,6 +245,10 @@ async function deleteDocument(id) {
         alert('Failed to delete document');
     }
 }
+
+// ==========================================
+// CHAT INTERACTION
+// ==========================================
 
 async function askQuestion() {
     const input = document.getElementById('questionInput');
@@ -185,21 +268,15 @@ async function askQuestion() {
         const documentId = filterSelect.value;
 
         let url, body;
-
-        // Build query params
         const params = new URLSearchParams();
-        if (documentId) {
-            params.append('document_id', documentId);
-        }
-        if (spoilerProtectionEnabled && maxChapter) {
-            params.append('max_chapter', maxChapter);
-        }
+
+        if (documentId) params.append('document_id', documentId);
+        if (spoilerProtectionEnabled && maxChapter) params.append('max_chapter', maxChapter);
+
         const queryString = params.toString() ? `?${params.toString()}` : '';
 
         if (currentMode === 'conversational') {
-            if (sessionId) {
-                params.set('session_id', sessionId);
-            }
+            if (sessionId) params.set('session_id', sessionId);
             url = `/api/v1/conversation/ask?${params.toString()}`;
             body = {question: question};
         } else {
@@ -218,10 +295,10 @@ async function askQuestion() {
         if (result.error) {
             addMessage('assistant', `Error: ${result.error}`);
         } else {
-            // Add spoiler filter indicator to response if active
             let answer = result.answer;
+            // Updated Banner Text
             if (result.spoiler_filter_active) {
-                answer = `📖 *[Searching chapters 1-${result.max_chapter} + reference material]*\n\n${answer}`;
+                answer = `📖 *[Reading Ch. 1-${result.max_chapter}]*\n\n${answer}`;
             }
             addMessage('assistant', answer, result.sources);
         }
@@ -239,26 +316,19 @@ function addMessage(role, content, sources = []) {
 
     messageDiv.className = role === 'user' ? 'message user' : 'message assistant';
 
-    // Convert markdown-style italics for spoiler indicator
     const formattedContent = content.replace(/\*\[(.+?)\]\*/g, '<em style="color: #888; font-size: 0.85em;">[$1]</em>');
-
     let html = `<p>${formattedContent}</p>`;
 
     if (sources && sources.length > 0) {
         const sourceMap = sources.reduce((acc, source) => {
             const key = source.chapter_title || source.document_title;
-            if (!acc[key]) {
-                acc[key] = [];
-            }
-            if (!acc[key].includes(source.chunk_index)) {
-                acc[key].push(source.chunk_index);
-            }
+            if (!acc[key]) acc[key] = [];
+            if (!acc[key].includes(source.chunk_index)) acc[key].push(source.chunk_index);
             return acc;
         }, {});
 
         const sourceHtml = Object.keys(sourceMap).map(title => {
-            const chunks = sourceMap[title].sort((a, b) => a - b).join(', ');
-            return `${title} (${chunks})`;
+            return `${title}`;
         }).join(' • ');
 
         html += `<div class="compact-sources">${sourceHtml}</div>`;
@@ -274,23 +344,24 @@ async function loadStatus() {
         const response = await fetch('/api/v1/chat/status');
         const status = await response.json();
 
-        // Update Header Status Badge
         const statusBadge = document.getElementById('headerStatus');
-        if (status.status === 'ready') {
-            statusBadge.textContent = '● System Ready';
-            statusBadge.className = 'status-badge ready';
-        } else {
-            statusBadge.textContent = '○ Not Ready';
-            statusBadge.className = 'status-badge not_ready';
+        if (statusBadge) {
+            if (status.status === 'ready') {
+                statusBadge.textContent = '● System Ready';
+                statusBadge.className = 'status-badge ready';
+            } else {
+                statusBadge.textContent = '○ Not Ready';
+                statusBadge.className = 'status-badge not_ready';
+            }
         }
 
-        // Update Sidebar Stats
-        document.getElementById('docCount').textContent = status.documents_loaded;
-        document.getElementById('chunkCount').textContent = status.total_chunks;
+        const docCount = document.getElementById('docCount');
+        const chunkCount = document.getElementById('chunkCount');
+        if (docCount) docCount.textContent = status.documents_loaded;
+        if (chunkCount) chunkCount.textContent = status.total_chunks;
 
     } catch (error) {
         console.error('Failed to load status:', error);
-        // Set error state if fetch fails
         const statusBadge = document.getElementById('headerStatus');
         if(statusBadge) {
             statusBadge.textContent = '! Connection Lost';
@@ -299,36 +370,6 @@ async function loadStatus() {
     }
 }
 
-function resetConversation() {
-    // 1. Confirm with user to prevent accidental clicks
-    if (!confirm("Start a new conversation? This will clear the current history and memory.")) {
-        return;
-    }
-
-    // 2. Clear the visual message list
-    const messagesDiv = document.getElementById('messages');
-    messagesDiv.innerHTML = '';
-
-    // 3. Handle logic based on current mode
-    if (currentMode === 'conversational') {
-        // Generate a fresh Session ID so the backend starts a new memory chain
-        sessionId = generateSessionId();
-
-        // Update the debug display if visible
-        const sessionDisplay = document.getElementById('sessionId');
-        if (sessionDisplay) {
-            sessionDisplay.textContent = sessionId.substr(0, 20) + '...';
-        }
-
-        addMessage('assistant', 'Started a new conversation session. I have forgotten our previous context.');
-    } else {
-        // In Simple Mode, just clearing the screen is enough (no memory to reset)
-        addMessage('assistant', 'Chat cleared. Ready for new questions.');
-    }
-}
-
-// Initialize
 loadDocuments();
 loadStatus();
 setInterval(loadStatus, 30000);
-toggleSpoilerProtection();

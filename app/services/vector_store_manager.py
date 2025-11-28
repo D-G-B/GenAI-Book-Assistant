@@ -1,6 +1,12 @@
 """
-Vector Store Manager - Handles FAISS operations, soft deletes, and filtering.
-Now supports chapter-based spoiler filtering.
+Vector Store Manager
+====================
+
+Handles all interactions with the FAISS vector database.
+This includes:
+1. Persistence: Loading and saving the index to disk.
+2. Soft Deletion: Managing a 'deleted' list to hide documents without expensive rebuilding.
+3. Retrieval: Providing a powerful retriever with support for metadata filtering.
 """
 
 from typing import List, Dict, Any, Optional, Set
@@ -153,7 +159,7 @@ class VectorStoreManager:
 
     def get_retriever(
         self,
-        k: int = 6,
+        k: int = 8,  # Increased context window for better retrieval
         document_id: Optional[int] = None,
         max_chapter: Optional[int] = None
     ):
@@ -164,41 +170,45 @@ class VectorStoreManager:
             k: Number of results to return
             document_id: Optional - filter to specific document
             max_chapter: Optional - filter to chapters <= this number (spoiler protection)
-                        Reference material (is_reference_material=True) is always included
         """
         if self.vector_store is None:
             return None
 
         def filter_function(metadata: Dict[str, Any]) -> bool:
-            """Filter based on document_id, deleted status, and chapter number."""
+            """
+            Filter based on document_id, deleted status, and Section Type.
+            """
             doc_id = metadata.get("document_id")
 
-            # Filter out soft-deleted documents
+            # 1. Filter out soft-deleted documents
             if doc_id in self.deleted_document_ids:
                 return False
 
-            # Filter to specific document if requested
+            # 2. Filter to specific document if requested
             if document_id is not None:
                 if doc_id != document_id:
                     return False
 
-            # Spoiler filter - chapter-based
+            # 3. Spoiler Protection Filter
             if max_chapter is not None:
-                # Always include reference material (glossaries, appendices)
-                is_reference = metadata.get("is_reference_material", False)
-                if is_reference:
+                sec_type = metadata.get("section_type", "body") # Default to body
+                ch_num = metadata.get("chapter_number")
+
+                # A. Always ALLOW Frontmatter (Prologue, Intro)
+                if sec_type == 'frontmatter':
                     return True
 
-                # For narrative content, check chapter number
-                chunk_chapter = metadata.get("chapter_number")
-
-                # If chunk has no chapter number, include it (might be intro/frontmatter)
-                if chunk_chapter is None:
-                    return True
-
-                # Filter out chapters beyond max_chapter
-                if chunk_chapter > max_chapter:
+                # B. Always BLOCK Backmatter (Epilogue, Appendices)
+                # If spoiler mode is ON, these are hidden.
+                if sec_type == 'backmatter':
                     return False
+
+                # C. Filter BODY by Chapter Number
+                if sec_type == 'body':
+                    # If regex failed to find a number, assume it's safe (or dangerous? Safe is better for UX)
+                    if ch_num is None:
+                        return True
+                    return ch_num <= max_chapter
 
             return True
 
