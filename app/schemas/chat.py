@@ -17,9 +17,9 @@ class ChatSource(BaseModel):
     """Represents a single chunk of text used to answer a question."""
     document_title: str
     chunk_index: int
-    # Cosine similarity in [0, 1]; None when the retrieval path doesn't expose it
-    # (e.g. the conversational chain does internal question rewriting and we
-    # cannot reliably attribute scores to source docs without a refactor).
+    # Cosine similarity in [0, 1]. Optional because callers that don't pass
+    # through search_with_scores (legacy paths, manually constructed responses)
+    # may omit it.
     similarity_score: Optional[float] = None
     chapter_title: Optional[str] = None
     chapter_number: Optional[int] = None
