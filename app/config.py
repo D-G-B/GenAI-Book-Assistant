@@ -1,8 +1,11 @@
+import logging
 import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class Settings:
     # API Keys
@@ -38,8 +41,7 @@ class Settings:
             missing_keys.append("GOOGLE_API_KEY")
 
         if missing_keys:
-            print(f"⚠️  Warning: Missing API keys: {', '.join(missing_keys)}")
-            print("Add them to your .env file to use those models")
+            logger.warning("Missing API keys: %s. Add them to your .env to use those models.", ", ".join(missing_keys))
 
         return len(missing_keys) == 0
 

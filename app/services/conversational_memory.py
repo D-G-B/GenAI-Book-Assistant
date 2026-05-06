@@ -3,11 +3,14 @@ Conversational memory system for context-aware conversations.
 Supports simplified spoiler filtering with optional reference material.
 """
 
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationSession:
@@ -200,7 +203,7 @@ class ContextAwareRAG:
                         filter_info.append("+ refs")
 
                 if filter_info:
-                    print(f"💬 Conversational search with filters: {', '.join(filter_info)}")
+                    logger.info("💬 Conversational search with filters: %s", ", ".join(filter_info))
 
                 chain = self.memory_manager.create_conversational_chain(
                     retriever=retriever,
@@ -212,7 +215,7 @@ class ContextAwareRAG:
 
             session.add_message('human', question)
 
-            print(f"💬 Conversational question (Session: {session_id[:8]}...): {question}")
+            logger.info("💬 Conversational question (Session: %s...): %s", session_id[:8], question)
 
             result = chain({"question": question})
 
@@ -263,9 +266,7 @@ class ContextAwareRAG:
             }
 
         except Exception as e:
-            print(f"❌ Error in conversational question: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("Error in conversational question")
             return {"error": str(e)}
 
     def get_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
@@ -309,5 +310,5 @@ def initialize_context_aware_rag(base_rag_service):
     """Initialize the context-aware RAG system."""
     global context_aware_rag
     context_aware_rag = ContextAwareRAG(base_rag_service)
-    print("✅ Conversational RAG initialized")
+    logger.info("✅ Conversational RAG initialized")
     return context_aware_rag
