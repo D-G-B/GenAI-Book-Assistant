@@ -63,3 +63,9 @@ faiss_index/
 .cache/
 .pytest_cache/
 .claude/
+
+# Local source books (large binaries, not for git)
+Books/
+
+# Windows NTFS alternate-stream artifacts (created when files are copied via Explorer)
+*:Zone.Identifier
