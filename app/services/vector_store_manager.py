@@ -135,20 +135,35 @@ class VectorStoreManager:
                 self.vector_store = FAISS.from_documents(documents, self.embeddings)
                 logger.info("Created vector store with %d chunks", len(documents))
             else:
-                success_count = 0
-                for doc in documents:
-                    try:
-                        self.vector_store.add_documents([doc])
-                        success_count += 1
-                    except (ValueError, RuntimeError) as e:
-                        logger.warning("Failed to add chunk: %s", e)
-                        continue
-
-                if success_count > 0:
-                    logger.info("Added %d/%d chunks to vector store", success_count, len(documents))
-                else:
-                    logger.error("Failed to add any chunks")
-                    return False
+                # Batched: a single add_documents call lets the embedding model
+                # run sentence-transformers' internal mini-batching once over
+                # the whole list instead of once per chunk. ~10-50x faster on
+                # CPU for multi-hundred-chunk uploads.
+                try:
+                    self.vector_store.add_documents(documents)
+                    logger.info("Added %d chunks to vector store", len(documents))
+                except (ValueError, RuntimeError) as batch_error:
+                    # Fall back to per-chunk so one bad chunk can't sink the
+                    # entire upload. This path is rare with local embeddings
+                    # but matters once API-based embeddings (rate limits) are
+                    # an option.
+                    logger.warning(
+                        "Batched add failed (%s); falling back to per-chunk", batch_error
+                    )
+                    success_count = 0
+                    for doc in documents:
+                        try:
+                            self.vector_store.add_documents([doc])
+                            success_count += 1
+                        except (ValueError, RuntimeError) as e:
+                            logger.warning("Failed to add chunk: %s", e)
+                            continue
+                    if success_count == 0:
+                        logger.error("Failed to add any chunks")
+                        return False
+                    logger.info(
+                        "Added %d/%d chunks via per-chunk fallback", success_count, len(documents)
+                    )
 
             self.save_to_disk()
             return True
