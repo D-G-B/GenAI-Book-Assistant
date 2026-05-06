@@ -1,196 +1,187 @@
-# RAG Document Assistant
+# RAG Reading Partner
 
-A production-ready Retrieval-Augmented Generation (RAG) system for intelligent document Q&A, built with FastAPI and LangChain.
+A FastAPI + LangChain RAG app for chatting with books — PDF, EPUB, and text — with **chapter-aware spoiler filtering** so you can ask questions about chapters you've already read without getting plot points from later in the book.
 
-## 🌟 Features
+> Status: Phase 1 hardening complete on the `cleanup-and-improvement` branch. See [current_state.md](./current_state.md) for the full state-of-the-app and roadmap.
 
-- **📁 Multi-Format Support**: Upload and process PDF, Word, Markdown, CSV, JSON, and text files
-- **💬 Dual Chat Modes**: 
-  - Simple Q&A for standalone questions
-  - Conversational mode with memory for context-aware discussions
-- **🔍 Smart Search**: Semantic search using FAISS vector database with HuggingFace embeddings
-- **🤖 Multiple LLMs**: Support for OpenAI, Google Gemini, and Anthropic Claude
-- **📚 Document Filtering**: Scope questions to specific documents
-- **💾 Persistent Storage**: Vector embeddings saved to disk for fast restart
-- **🎨 Web Interface**: Clean, modern UI for document management and chat
+## Highlights
 
-## 🚀 Quick Start
+- **Chapter-aware spoiler filtering** — set `max_chapter=N` and only chunks with `chapter_number ≤ N` are retrieved. Reference material (glossary, appendices) is opt-in via `include_reference=True`.
+- **Multi-format ingestion** — `.pdf`, `.epub`, `.docx`, `.txt`, `.md`, `.csv`, `.json`. Custom EPUB loader builds chapter metadata from the spine.
+- **Two chat modes** — simple Q&A and a conversational mode with session memory and pronoun resolution.
+- **Cross-encoder reranker** — `BAAI/bge-reranker-base` reorders the top-N FAISS candidates to lift recall on proper-noun queries (recall@5 0.80 → 0.90 on the Dune eval).
+- **Real similarity scores** — both Q&A paths return cosine-similarity scores per source chunk (no placeholders).
+- **Multi-LLM** — OpenAI, Anthropic Claude, or Google Gemini, picked from whichever API key is set.
+- **FAISS persistence** — index lives in `./faiss_index/` and survives restarts.
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.8+
-- Virtual environment (recommended)
+- Python 3.12+
+- [uv](https://github.com/astral-sh/uv) for dependency management
+- (Optional) CUDA GPU — sentence-transformers and the reranker pick it up automatically
 
-### Installation
+### Install
 
-1. **Clone the repository**
-   ```bash
-   git clone <your-repo-url>
-   cd <project-directory>
-   ```
+```bash
+git clone <repo-url>
+cd GenAI-Book-Assistant
+uv sync
+```
 
-2. **Create and activate virtual environment**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+### Configure
 
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+Create `.env` in the project root:
 
-4. **Set up environment variables**
-   
-   Create a `.env` file in the root directory:
-   ```env
-   # At least one API key is required
-   OPENAI_API_KEY=your_openai_api_key_here
-   GOOGLE_API_KEY=your_google_api_key_here
-   ANTHROPIC_API_KEY=your_anthropic_api_key_here
+```env
+# At least one API key is required
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GOOGLE_API_KEY=...
 
-   # Model configurations (optional)
-   DEFAULT_OPENAI_MODEL=gpt-3.5-turbo
-   DEFAULT_GEMINI_MODEL=gemini-pro
-   DEFAULT_CLAUDE_MODEL=claude-3-opus-20240229
+# Pick one default model per provider you've enabled
+DEFAULT_OPENAI_MODEL=gpt-4o-mini
+DEFAULT_CLAUDE_MODEL=claude-3-5-haiku-latest
+DEFAULT_GEMINI_MODEL=gemini-2.0-flash
 
-   # App settings (optional)
-   DEBUG=False
-   LOG_LEVEL=INFO
-   MAX_TOKENS=1000
-   ```
+# Optional
+DEBUG=False
+LOG_LEVEL=INFO
+MAX_TOKENS=1000
 
-5. **Run the application**
-   ```bash
-   uvicorn main:app --reload
-   ```
+# Retrieval
+RETRIEVAL_K=8
+LLM_REQUEST_TIMEOUT=30
+LLM_MAX_RETRIES=2
 
-6. **Open your browser**
-   
-   Navigate to `http://localhost:8000`
+# Reranker (optional; recall@5 boost on proper-noun queries)
+RERANKER_ENABLED=True
+RERANKER_MODEL=BAAI/bge-reranker-base
+RERANK_POOL_SIZE=30
+```
 
-## 📖 Usage
+### Run
 
-### Document Upload
+```bash
+uv run uvicorn main:app --reload   # dev (auto-reload tied to DEBUG)
+# or
+uv run python main.py              # plain
+```
 
-1. Click on the upload section in the sidebar
-2. Choose a file (PDF, DOCX, TXT, MD, CSV, or JSON)
-3. Optionally add a custom title
-4. Click "Upload & Process"
-5. Wait for processing to complete
+Open http://localhost:8000.
 
-### Asking Questions
+## Testing
 
-**Simple Q&A Mode:**
-- Each question is treated independently
-- Best for factual queries about documents
+The project ships with a unit test suite for the core retrieval IP and a small retrieval eval against Dune.
 
-**Conversational Mode:**
-- Maintains context between questions
-- Ideal for follow-up questions and discussions
-- System remembers previous exchanges in the session
+### Unit tests (fast, no API keys, ~1s)
 
-### Document Filtering
+```bash
+uv run pytest tests/
+```
 
-Use the dropdown menu to limit searches to specific documents, improving accuracy and speed.
+Covers:
+- `tests/test_spoiler_filter.py` — table-driven over every combination of `max_chapter`, `include_reference`, soft-delete, and document filter (22 tests, the IP).
+- `tests/test_chapter_extraction.py` — arabic / word / roman / uppercase chapter markers, reference classification, ordering (13 tests).
+- `tests/test_score_normalization.py` — L2 → cosine math and clamping (6 tests).
 
-## 🏗️ Architecture
+The legacy live-server scripts (`test_reading_partner.py`, `test_conversational.py`, `add_complex_document.py`) are skipped under pytest via `tests/conftest.py`. Run them directly when a server is up:
+
+```bash
+uv run python tests/test_reading_partner.py
+```
+
+### Retrieval eval (recall@5)
+
+A 10-question eval over Dune, with the FAISS index cached at `tests/eval/.cache/`:
+
+```bash
+# Drop a Dune .epub or .pdf into Books/ first (the folder is gitignored)
+uv run python -m tests.eval.run_eval
+
+# Force a fresh index build
+uv run python -m tests.eval.run_eval --rebuild
+
+# Use a specific book
+uv run python -m tests.eval.run_eval --book Books/dune.pdf
+
+# Override output path
+uv run python -m tests.eval.run_eval --out tests/eval/results/my_run.json
+```
+
+Saved results live under `tests/eval/results/`:
+- `baseline.json` — MiniLM + char chunking, no reranker (recall@5 = 0.80)
+- `with_reranker.json` — same stack + cross-encoder rerank (recall@5 = 0.90)
+
+The eval is purely keyword-containment over the top-5 retrieved chunks; it doesn't call an LLM. Treat it as a guard-rail for retrieval changes, not a quality measure of the final answers.
+
+## Architecture
 
 ```
 project/
 ├── app/
-│   ├── api/              # API route handlers
+│   ├── api/                      # FastAPI routers
 │   │   ├── chat_routes.py
 │   │   ├── conversational_routes.py
 │   │   └── documents_routes.py
-│   ├── services/         # Business logic
-│   │   ├── enhanced_rag_service.py
-│   │   ├── conversational_memory.py
-│   │   └── advanced_document_loaders.py
-│   ├── schemas/          # Pydantic models
-│   ├── database.py       # SQLAlchemy setup
-│   └── config.py         # Configuration management
-├── static/               # Frontend assets
-├── templates/            # HTML templates
-├── tests/                # Test utilities
-└── main.py              # FastAPI application
+│   ├── services/
+│   │   ├── enhanced_rag_service.py       # simple Q&A path
+│   │   ├── conversational_memory.py      # condense → retrieve → answer (LCEL-style)
+│   │   ├── document_manager.py           # ingestion, chunking, chapter detection
+│   │   ├── advanced_document_loaders.py  # custom EPUB + format dispatch
+│   │   ├── vector_store_manager.py       # FAISS + spoiler filter + reranker
+│   │   └── reranker.py                   # cross-encoder, lazy-loaded
+│   ├── schemas/                  # Pydantic models
+│   ├── database.py
+│   └── config.py
+├── tests/
+│   ├── test_spoiler_filter.py
+│   ├── test_chapter_extraction.py
+│   ├── test_score_normalization.py
+│   └── eval/
+│       ├── dune_qa.jsonl
+│       ├── run_eval.py
+│       └── results/
+├── static/                       # JS, CSS
+├── templates/                    # Jinja2
+└── main.py
 ```
 
-## 🔧 Configuration
-
-### Supported File Types
-
-- **Text**: `.txt`, `.md`, `.markdown`
-- **Documents**: `.pdf`, `.docx`, `.doc`
-- **Data**: `.csv`, `.json`
-
-### Embedding Model
-
-Uses `all-MiniLM-L6-v2` from HuggingFace for generating embeddings (runs on CPU).
-
-### Vector Storage
-
-FAISS index is automatically saved to `./faiss_index/` for persistence across restarts.
-
-## 📊 API Endpoints
+## API
 
 ### Documents
-- `POST /api/v1/documents/upload-file` - Upload a document file
-- `GET /api/v1/documents/list` - List all documents
-- `DELETE /api/v1/documents/{id}` - Delete a document
+
+- `POST /api/v1/documents/upload-file` — multipart upload (`.pdf`, `.epub`, `.docx`, `.txt`, `.md`, `.csv`, `.json`)
+- `GET /api/v1/documents/list?include_deleted=false`
+- `GET /api/v1/documents/{id}/status`
+- `DELETE /api/v1/documents/{id}` — soft delete
+- `DELETE /api/v1/documents/all` — hard delete everything
+- `POST /api/v1/documents/rebuild-index`
 
 ### Chat
-- `POST /api/v1/chat/ask` - Ask a question (simple mode)
-- `POST /api/v1/conversation/ask` - Ask with conversation memory
-- `GET /api/v1/conversation/history/{session_id}` - Get conversation history
-- `GET /api/v1/chat/status` - Get system status
 
-## 🛠️ Development
+- `POST /api/v1/chat/ask` — simple Q&A; takes `document_id`, `max_chapter`, `include_reference`, `k` query params
+- `POST /api/v1/conversation/ask` — conversational; same filters plus `session_id`
+- `GET /api/v1/conversation/history/{session_id}`
+- `DELETE /api/v1/conversation/session/{session_id}`
+- `GET /api/v1/conversation/sessions`
+- `GET /health`
 
-### Adding New Document Types
+## Configuration reference
 
-Extend the `MultiFormatDocumentLoader` class in `app/services/advanced_document_loaders.py`:
+| Env var | Default | Purpose |
+|---|---|---|
+| `DEBUG` | `False` | Gates `uvicorn --reload` and verbose logging |
+| `LOG_LEVEL` | `INFO` | Standard logging level |
+| `MAX_TOKENS` | `1000` | LLM max output tokens |
+| `RETRIEVAL_K` | `8` | Chunks returned per query |
+| `LLM_REQUEST_TIMEOUT` | `30` | LLM call timeout (seconds) |
+| `LLM_MAX_RETRIES` | `2` | LLM retry budget |
+| `RERANKER_ENABLED` | `True` | Toggle the cross-encoder |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-base` | Reranker model id |
+| `RERANK_POOL_SIZE` | `30` | Candidates to fetch from FAISS before rerank |
 
-```python
-def _load_custom(self, file_path: str, metadata: Dict[str, Any]) -> List[Document]:
-    # Your custom loader logic
-    pass
-```
+## License
 
-### Customizing the Prompt
-
-Modify the prompt template in `enhanced_rag_service.py`:
-
-```python
-prompt_template = """Your custom prompt here
-Context: {context}
-Question: {question}
-Answer:"""
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📝 License
-
-This project is licensed under the MIT License.
-
-## 🙏 Acknowledgments
-
-- Built with [FastAPI](https://fastapi.tiangolo.com/)
-- Powered by [LangChain](https://langchain.com/)
-- Vector search by [FAISS](https://faiss.ai/)
-- UI inspired by modern chat interfaces
-
-## 📧 Contact
-
-For questions or suggestions, please open an issue on GitHub.
-
----
-
-**Note**: This is a learning project focused on RAG implementation and LLM integration. For production use, consider adding authentication, rate limiting, and comprehensive error handling.
+MIT.
