@@ -28,6 +28,14 @@ class Settings:
     LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
     LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
+    # Reranker Settings
+    # Cross-encoder reranker reorders top-N FAISS candidates for better recall
+    # on proper-noun and lexically-mismatched queries. Set RERANKER_ENABLED=False
+    # to disable (e.g. low-memory environments).
+    RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "True").lower() == "true"
+    RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+    RERANK_POOL_SIZE = int(os.getenv("RERANK_POOL_SIZE", "30"))
+
     def validate_api_keys(self):
         """
         Check if the api keys are present

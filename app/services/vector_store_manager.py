@@ -20,6 +20,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +44,9 @@ class VectorStoreManager:
         # The actual vector store
         self.vector_store: Optional[FAISS] = None
 
+        # Optional cross-encoder reranker (lazy-loaded on first use)
+        self.reranker = self._init_reranker()
+
         # Load existing state
         self._load_deleted_ids()
         self._load_vector_store()
@@ -49,6 +54,14 @@ class VectorStoreManager:
         logger.info("Vector Store Manager initialized")
         if self.deleted_document_ids:
             logger.info("Tracking %d soft-deleted documents", len(self.deleted_document_ids))
+
+    @staticmethod
+    def _init_reranker():
+        if not settings.RERANKER_ENABLED:
+            logger.info("Reranker disabled via settings")
+            return None
+        from app.services.reranker import CrossEncoderReranker
+        return CrossEncoderReranker(model_name=settings.RERANKER_MODEL)
 
     def _load_vector_store(self):
         """Load FAISS vector store from disk if it exists."""
@@ -252,22 +265,33 @@ class VectorStoreManager:
         Retrieve top-k documents along with their FAISS similarity scores,
         applying the same spoiler/soft-delete filtering as get_retriever().
 
-        Returns a list of (Document, score) tuples ordered by relevance.
-        Score semantics: FAISS returns L2 distance by default; lower = closer.
-        Callers that want a 0..1 similarity should use normalize_score().
+        When a reranker is configured we first pull a wider candidate pool
+        (RERANK_POOL_SIZE) and let the cross-encoder reorder it; otherwise
+        we just take the top-k directly from FAISS.
+
+        Returns a list of (Document, score) tuples. The score is always the
+        original FAISS L2 distance (lower = closer); reranking only changes
+        order, never the score values, so normalize_score() math is preserved.
         """
         if self.vector_store is None:
             return []
 
         filter_fn = self._build_filter_function(document_id, max_chapter, include_reference)
-        fetch_k = self._fetch_k_for(k, document_id, max_chapter)
 
-        return self.vector_store.similarity_search_with_score(
+        retrieve_k = max(k, settings.RERANK_POOL_SIZE) if self.reranker else k
+        fetch_k = self._fetch_k_for(retrieve_k, document_id, max_chapter)
+
+        candidates = self.vector_store.similarity_search_with_score(
             query,
-            k=k,
+            k=retrieve_k,
             fetch_k=fetch_k,
             filter=filter_fn,
         )
+
+        if self.reranker is None or len(candidates) <= 1:
+            return candidates[:k]
+
+        return self.reranker.rerank(query, candidates, top_k=k)
 
     @staticmethod
     def normalize_score(raw_score: float) -> float:
