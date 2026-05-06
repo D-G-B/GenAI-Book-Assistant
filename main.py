@@ -80,4 +80,4 @@ async def health_check():
 if __name__ == "__main__":
     # so i dont forget : ->>>> source .venv/bin/activate  then ->>> uv run uvicorn main:app --reload
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=settings.DEBUG)

@@ -62,3 +62,4 @@ faiss_index/
 # Cache
 .cache/
 .pytest_cache/
+.claude/
