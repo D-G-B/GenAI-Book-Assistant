@@ -20,6 +20,11 @@ class Settings:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1000"))
 
+    # Retrieval Settings
+    RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "8"))
+    LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
+    LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
     def validate_api_keys(self):
         """
         Check if the api keys are present

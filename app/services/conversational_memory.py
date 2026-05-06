@@ -221,10 +221,15 @@ class ContextAwareRAG:
 
             sources = []
             for i, doc in enumerate(source_docs):
+                # NOTE: ConversationalRetrievalChain rewrites the question
+                # internally (pronoun resolution) before retrieving, so we
+                # cannot reliably attribute scores to source docs without
+                # bypassing the chain. Leaving similarity_score=None until
+                # the Phase 1B LCEL refactor replaces this chain.
                 source_info = {
                     "document_title": doc.metadata.get('document_title', 'Unknown'),
                     "chunk_index": doc.metadata.get('chunk_index', i),
-                    "similarity_score": 0.85
+                    "similarity_score": None,
                 }
 
                 chapter_num = doc.metadata.get('chapter_number')
@@ -245,7 +250,8 @@ class ContextAwareRAG:
             return {
                 "answer": answer,
                 "sources": sources,
-                "confidence": 0.8,
+                # See similarity_score note above — confidence pending Phase 1B refactor.
+                "confidence": None,
                 "chunks_used": len(sources),
                 "session_id": session_id,
                 "conversation_length": len(session.messages),
