@@ -235,7 +235,7 @@ def main():
         "stack": {
             "embeddings": "all-MiniLM-L6-v2",
             "chunker": "RecursiveCharacterTextSplitter(1000/200)",
-            "reranker": None,
+            "reranker": vsm.reranker.model_name if vsm.reranker else None,
         },
         "summary": summary,
         "results": results,

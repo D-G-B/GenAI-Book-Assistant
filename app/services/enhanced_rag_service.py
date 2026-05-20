@@ -4,19 +4,56 @@ Supports simplified spoiler filtering with optional reference material.
 """
 
 import logging
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.schema import Document
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 
 from app.config import settings
 from app.services.document_manager import DocumentManager
 from app.services.vector_store_manager import VectorStoreManager
 
 logger = logging.getLogger(__name__)
+
+
+# --- Patch langchain_google_genai's hard-coded retry behaviour --------------
+# The library bakes max_retries=10 with exponential backoff (1..60s) into
+# _create_retry_decorator() and does not read the constructor's max_retries
+# kwarg. On a free-tier 429 that loops ~7-10 times, blowing through quota and
+# making the request hang for minutes. We override the decorator to honour
+# settings.LLM_MAX_RETRIES. Our own invoke_with_fallback() already moves to the
+# next provider on failure, so we don't need an aggressive retry here.
+import google.api_core.exceptions  # noqa: E402
+import langchain_google_genai.chat_models as _lcgg_chat  # noqa: E402
+from tenacity import (  # noqa: E402
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+
+def _patched_google_retry_decorator():
+    return retry(
+        reraise=True,
+        stop=stop_after_attempt(max(1, settings.LLM_MAX_RETRIES)),
+        wait=wait_exponential(multiplier=2, min=1, max=60),
+        retry=(
+            retry_if_exception_type(google.api_core.exceptions.ResourceExhausted)
+            | retry_if_exception_type(google.api_core.exceptions.ServiceUnavailable)
+            | retry_if_exception_type(google.api_core.exceptions.GoogleAPIError)
+        ),
+    )
+
+
+_lcgg_chat._create_retry_decorator = _patched_google_retry_decorator
+
+# Import AFTER the patch is installed so ChatGoogleGenerativeAI picks up the
+# patched _create_retry_decorator on first use.
+from langchain_google_genai import ChatGoogleGenerativeAI  # noqa: E402  pylint: disable=wrong-import-position
 
 
 class EnhancedRAGService:
@@ -33,8 +70,12 @@ class EnhancedRAGService:
         # Initialize document manager
         self.document_manager = DocumentManager(self.vector_store_manager)
 
-        # Initialize LLM
-        self.llm = self._initialize_llm()
+        # Initialize LLMs (ordered list of all configured providers for fallback)
+        self.llms: List[Tuple[str, Any]] = self._initialize_llms()
+
+        # Cumulative call counters (reset on server restart).
+        self.call_count_total: int = 0
+        self.call_count_by_provider: Dict[str, int] = defaultdict(int)
 
         # Conversational features
         self.context_aware_rag = None
@@ -42,53 +83,110 @@ class EnhancedRAGService:
 
         logger.info("Enhanced RAG Service initialized")
 
-    def _initialize_llm(self):
-        """Initialize the appropriate LLM based on available API keys."""
+    @property
+    def llm(self):
+        """First configured provider, or None. Kept for existing availability checks."""
+        return self.llms[0][1] if self.llms else None
+
+    def _initialize_llms(self) -> List[Tuple[str, Any]]:
+        """Build an ordered list of (provider_name, llm) pairs for every configured provider."""
 
         timeout = settings.LLM_REQUEST_TIMEOUT
         max_retries = settings.LLM_MAX_RETRIES
+        providers: List[Tuple[str, Any]] = []
 
-        if settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
-            logger.info("Using OpenAI: %s", settings.DEFAULT_OPENAI_MODEL)
-            return ChatOpenAI(
-                model_name=settings.DEFAULT_OPENAI_MODEL,
-                openai_api_key=settings.OPENAI_API_KEY,
-                temperature=0.3,
-                max_tokens=settings.MAX_TOKENS,
-                request_timeout=timeout,
-                max_retries=max_retries,
-            )
-        if settings.ANTHROPIC_API_KEY and settings.DEFAULT_CLAUDE_MODEL:
-            logger.info("Using Claude: %s", settings.DEFAULT_CLAUDE_MODEL)
-            return ChatAnthropic(
-                model=settings.DEFAULT_CLAUDE_MODEL,
-                anthropic_api_key=settings.ANTHROPIC_API_KEY,
-                temperature=0.3,
-                max_tokens=settings.MAX_TOKENS,
-                default_request_timeout=timeout,
-                max_retries=max_retries,
-            )
         if settings.GOOGLE_API_KEY and settings.DEFAULT_GEMINI_MODEL:
-            logger.info("Using Google Gemini: %s", settings.DEFAULT_GEMINI_MODEL)
             # Note: ChatGoogleGenerativeAI exposes timeout/retries via the
             # underlying transport; LangChain's wrapper accepts max_retries
             # and a `timeout` kwarg in newer releases. We pass what we can
             # and let langchain ignore unknowns rather than break here.
-            return ChatGoogleGenerativeAI(
-                model=settings.DEFAULT_GEMINI_MODEL,
-                google_api_key=settings.GOOGLE_API_KEY,
-                temperature=0.3,
-                max_tokens=settings.MAX_TOKENS,
-                timeout=timeout,
-                max_retries=max_retries,
+            providers.append(
+                (
+                    "google",
+                    ChatGoogleGenerativeAI(
+                        model=settings.DEFAULT_GEMINI_MODEL,
+                        google_api_key=settings.GOOGLE_API_KEY,
+                        temperature=0.3,
+                        max_tokens=settings.MAX_TOKENS,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                    ),
+                )
             )
-        logger.warning("No LLM configured - check your API keys")
-        return None
+
+        if settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
+            providers.append(
+                (
+                    "openai",
+                    ChatOpenAI(
+                        model_name=settings.DEFAULT_OPENAI_MODEL,
+                        openai_api_key=settings.OPENAI_API_KEY,
+                        temperature=0.3,
+                        max_tokens=settings.MAX_TOKENS,
+                        request_timeout=timeout,
+                        max_retries=max_retries,
+                    ),
+                )
+            )
+        if settings.ANTHROPIC_API_KEY and settings.DEFAULT_CLAUDE_MODEL:
+            providers.append(
+                (
+                    "anthropic",
+                    ChatAnthropic(
+                        model=settings.DEFAULT_CLAUDE_MODEL,
+                        anthropic_api_key=settings.ANTHROPIC_API_KEY,
+                        temperature=0.3,
+                        max_tokens=settings.MAX_TOKENS,
+                        default_request_timeout=timeout,
+                        max_retries=max_retries,
+                    ),
+                )
+            )
+
+        if providers:
+            logger.info(
+                "LLM providers configured (in priority order): %s",
+                ", ".join(name for name, _ in providers),
+            )
+        else:
+            logger.warning("No LLM configured - check your API keys")
+        return providers
+
+    def invoke_with_fallback(self, prompt_text: str) -> Dict[str, Any]:
+        """Invoke configured providers in order; on any exception, log and try the next.
+
+        Returns: {"text": str, "provider": str, "calls": int} where `calls` counts
+        the providers tried during *this* invocation (1 if the first worked,
+        2 if first failed and second worked, etc.).
+        """
+        last_exc: Optional[Exception] = None
+        calls_this_invocation = 0
+        for name, llm in self.llms:
+            calls_this_invocation += 1
+            self.call_count_total += 1
+            self.call_count_by_provider[name] += 1
+            logger.info(
+                "LLM call #%d (provider=%s, totals=%s)",
+                self.call_count_total,
+                name,
+                dict(self.call_count_by_provider),
+            )
+            try:
+                response = llm.invoke(prompt_text)
+                text = getattr(response, "content", None) or str(response)
+                return {"text": text, "provider": name, "calls": calls_this_invocation}
+            except Exception as exc:
+                logger.warning("LLM provider '%s' failed: %s", name, exc)
+                last_exc = exc
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("No LLM providers configured")
 
     def _setup_conversational_rag(self):
         """Initialize conversational RAG system."""
         if self.llm:
             from app.services.conversational_memory import initialize_context_aware_rag
+
             self.context_aware_rag = initialize_context_aware_rag(self)
         else:
             logger.warning("Conversational features not available (no LLM)")
@@ -103,7 +201,7 @@ class EnhancedRAGService:
             "Context from the book/documents:\n{context}\n\n"
             "User's Question: {question}\n\n"
             "Instructions:\n"
-            "1. **Role**: Act as a helpful guide. If asked \"Who is X?\", provide their "
+            '1. **Role**: Act as a helpful guide. If asked "Who is X?", provide their '
             "identity, allegiance, and key relationships based on the context.\n"
             "2. **Terminology**: If unique or technical terms appear in the context, "
             "define them briefly if relevant to the answer.\n"
@@ -148,7 +246,9 @@ class EnhancedRAGService:
             }
 
         if not self.llm:
-            return {"error": "No language model configured. Please check your API keys."}
+            return {
+                "error": "No language model configured. Please check your API keys."
+            }
 
         retrieval_k = k if k is not None else settings.RETRIEVAL_K
 
@@ -161,7 +261,12 @@ class EnhancedRAGService:
             if include_reference:
                 filter_info.append("+ reference material")
         scope = ", ".join(filter_info) if filter_info else "all documents"
-        logger.info("RAG retrieval (k=%d, scope=%s) for question: %r", retrieval_k, scope, question)
+        logger.info(
+            "RAG retrieval (k=%d, scope=%s) for question: %r",
+            retrieval_k,
+            scope,
+            question,
+        )
 
         try:
             docs_with_scores = self.vector_store_manager.search_with_scores(
@@ -186,21 +291,28 @@ class EnhancedRAGService:
                     "include_reference": include_reference,
                 }
 
-            answer = self._invoke_llm_with_context(question, docs_with_scores)
+            llm_result = self._invoke_llm_with_context(question, docs_with_scores)
             sources = self._format_sources(docs_with_scores)
-            confidence = self._aggregate_confidence([s["similarity_score"] for s in sources])
+            confidence = self._aggregate_confidence(
+                [s["similarity_score"] for s in sources]
+            )
 
             return {
-                "answer": answer,
+                "answer": llm_result["text"],
                 "sources": sources,
                 "confidence": confidence,
                 "chunks_used": len(sources),
                 "spoiler_filter_active": max_chapter is not None,
                 "max_chapter": max_chapter,
                 "include_reference": include_reference,
+                "llm_provider": llm_result["provider"],
+                "llm_calls": llm_result["calls"],
             }
 
-        except (ValueError, RuntimeError) as e:
+        except Exception as e:
+            # Broad catch so provider SDK errors (rate limits, auth, network) and
+            # any other unexpected failure surface as the {"error": ...} response
+            # instead of propagating as a 500. Matches the conversational path.
             logger.exception("Error generating answer")
             return {"error": str(e)}
 
@@ -208,14 +320,15 @@ class EnhancedRAGService:
         self,
         question: str,
         docs_with_scores: List[Tuple[Document, float]],
-    ) -> str:
-        """Format retrieved chunks into the prompt and call the LLM."""
+    ) -> Dict[str, Any]:
+        """Format retrieved chunks into the prompt and call the LLM.
+
+        Returns the dict from invoke_with_fallback: text + provider + calls.
+        """
         context = "\n\n".join(doc.page_content for doc, _ in docs_with_scores)
         prompt_text = self._ANSWER_PROMPT.format(context=context, question=question)
 
-        response = self.llm.invoke(prompt_text)
-        # ChatModels return AIMessage; older string-LLM compat returns str.
-        return getattr(response, "content", None) or str(response)
+        return self.invoke_with_fallback(prompt_text)
 
     def _format_sources(
         self,
@@ -258,15 +371,20 @@ class EnhancedRAGService:
         stats = self.document_manager.get_stats()
 
         return {
-            "documents_loaded": stats['processed_documents'],
-            "total_chunks": stats['total_chunks'],
-            "deleted_documents": stats['deleted_documents'],
+            "documents_loaded": stats["processed_documents"],
+            "total_chunks": stats["total_chunks"],
+            "deleted_documents": stats["deleted_documents"],
             "embedding_model": "all-MiniLM-L6-v2",
             "vector_database": "FAISS",
             "llm_available": self.llm is not None,
             "conversational_available": self.context_aware_rag is not None,
-            "status": "ready" if stats['total_chunks'] > 0 and self.llm else "not_ready",
-            "should_rebuild": stats['should_rebuild']
+            "status": "ready"
+            if stats["total_chunks"] > 0 and self.llm
+            else "not_ready",
+            "should_rebuild": stats["should_rebuild"],
+            # Cumulative LLM call counts since server startup (in-memory only).
+            "llm_calls_total": self.call_count_total,
+            "llm_calls_by_provider": dict(self.call_count_by_provider),
         }
 
 

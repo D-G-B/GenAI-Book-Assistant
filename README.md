@@ -64,7 +64,7 @@ RERANK_POOL_SIZE=30
 ### Run
 
 ```bash
-uv run uvicorn main:app --reload   # dev (auto-reload tied to DEBUG)
+uv run uvicorn main:app --reload   # dev (auto-reload on file changes)
 # or
 uv run python main.py              # plain
 ```

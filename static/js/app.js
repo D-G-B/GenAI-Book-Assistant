@@ -312,6 +312,11 @@ async function askQuestion() {
 
         const result = await response.json();
 
+        if (!response.ok) {
+            addMessage('assistant', `Error: ${result.detail || result.error || response.statusText}`);
+            return;
+        }
+
         if (result.error) {
             addMessage('assistant', `Error: ${result.error}`);
         } else {
@@ -327,7 +332,10 @@ async function askQuestion() {
                 answer = `${banner}\n\n${answer}`;
             }
 
-            addMessage('assistant', answer, result.sources);
+            const meta = (result.llm_provider || typeof result.llm_calls === 'number')
+                ? {provider: result.llm_provider, calls: result.llm_calls}
+                : null;
+            addMessage('assistant', answer, result.sources, meta);
         }
     } catch (error) {
         addMessage('assistant', `Error: ${error.message}`);
@@ -337,7 +345,7 @@ async function askQuestion() {
     }
 }
 
-function addMessage(role, content, sources = []) {
+function addMessage(role, content, sources = [], meta = null) {
     const messagesDiv = document.getElementById('messages');
     const messageDiv = document.createElement('div');
 
@@ -385,6 +393,12 @@ function addMessage(role, content, sources = []) {
         const uniqueLabels = [...new Set(sourceLabels)];
         const sourceHtml = uniqueLabels.join(' • ');
         html += `<div class="compact-sources">${sourceHtml}</div>`;
+    }
+
+    // LLM telemetry caption: "via google · 1 call".
+    if (meta && meta.provider) {
+        const callsLabel = meta.calls === 1 ? '1 call' : `${meta.calls} calls`;
+        html += `<div class="compact-sources" style="opacity:0.7;">via ${meta.provider} · ${callsLabel}</div>`;
     }
 
     messageDiv.innerHTML = html;

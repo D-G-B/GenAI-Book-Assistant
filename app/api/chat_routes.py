@@ -46,6 +46,10 @@ async def ask_question(
 
         return ChatResponse(**result)
 
+    except HTTPException:
+        # Intentional HTTP responses (e.g. the 400 above) must pass through;
+        # otherwise the catch-all below would swallow them as 500s.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process question: {str(e)}")
 

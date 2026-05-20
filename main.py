@@ -4,11 +4,14 @@ FastAPI application with RAG and conversational memory
 
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.api import chat_routes, conversational_routes, documents_routes
 from app.config import settings
+from app.database import Base, LoreDocument, SessionLocal, engine
 
 logging.basicConfig(
     level=settings.LOG_LEVEL,
@@ -16,8 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from app.api import chat_routes, documents_routes, conversational_routes
-from app.database import Base, engine, SessionLocal, LoreDocument
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,11 +56,12 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("👋 Application shutdown")
 
+
 app = FastAPI(
     title="RAG Document Assistant",
     description="RAG-powered chat assistant with conversational memory",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Mount static files and templates
@@ -71,21 +73,22 @@ app.include_router(documents_routes.router, prefix="/api/v1")
 app.include_router(chat_routes.router, prefix="/api/v1")
 app.include_router(conversational_routes.router, prefix="/api/v1")
 
+
 # Frontend
 @app.get("/")
 async def root(request: Request):
     """Serve the main frontend application"""
     return templates.TemplateResponse("index.html", {"request": request})
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "version": "2.0.0"
-    }
+    return {"status": "healthy", "version": "2.0.0"}
+
 
 if __name__ == "__main__":
     # so i dont forget : ->>>> source .venv/bin/activate  then ->>> uv run uvicorn main:app --reload
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=settings.DEBUG)

@@ -37,6 +37,9 @@ class ChatResponse(BaseModel):
     spoiler_filter_active: bool = False
     max_chapter: Optional[int] = None
     include_reference: Optional[bool] = None
+    # Telemetry: which provider answered, how many LLM calls this request made.
+    llm_provider: Optional[str] = None
+    llm_calls: Optional[int] = None
 
 # --- Extended Models for Conversational Mode ---
 
@@ -71,3 +74,6 @@ class ServiceStatus(BaseModel):
     embedding_model: str
     vector_database: str
     status: str
+    # Cumulative LLM call counters since server startup (in-memory only).
+    llm_calls_total: Optional[int] = None
+    llm_calls_by_provider: Optional[Dict[str, int]] = None

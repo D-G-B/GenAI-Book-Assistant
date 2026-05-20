@@ -9,7 +9,7 @@ scores for retrieved chunks and control retrieval k / filters per-query.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain.prompts import PromptTemplate
 
@@ -167,7 +167,9 @@ class ContextAwareRAG:
             session.add_message('human', question)
 
             # 1. Resolve pronouns / context into a standalone search query.
-            search_query = self._condense_question(question, session.messages[:-1])
+            search_query, condense_result = self._condense_question(
+                question, session.messages[:-1]
+            )
 
             # 2. Retrieve with real cosine-style similarity scores.
             docs_with_scores = self.base_rag.vector_store_manager.search_with_scores(
@@ -184,6 +186,7 @@ class ContextAwareRAG:
                     "given the current filters."
                 )
                 session.add_message('assistant', empty_answer)
+                # condense may still have called the LLM; surface that count.
                 return self._build_response(
                     answer=empty_answer,
                     sources=[],
@@ -192,14 +195,16 @@ class ContextAwareRAG:
                     document_id=document_id,
                     max_chapter=max_chapter,
                     include_reference=include_reference,
+                    llm_provider=condense_result["provider"] if condense_result else None,
+                    llm_calls=condense_result["calls"] if condense_result else 0,
                 )
 
             # 3. Generate the answer from the retrieved chunks.
             context = "\n\n".join(doc.page_content for doc, _ in docs_with_scores)
-            answer = self._invoke_llm(
+            answer_result = self._invoke_llm(
                 _QA_PROMPT.format(context=context, question=question)
             )
-            session.add_message('assistant', answer)
+            session.add_message('assistant', answer_result["text"])
 
             sources = self._format_sources(docs_with_scores)
             valid_scores = [
@@ -207,14 +212,22 @@ class ContextAwareRAG:
             ]
             confidence = sum(valid_scores) / len(valid_scores) if valid_scores else None
 
+            # Telemetry: sum LLM calls across condense + answer; report the
+            # provider that produced the final answer (most informative).
+            total_calls = answer_result["calls"]
+            if condense_result:
+                total_calls += condense_result["calls"]
+
             return self._build_response(
-                answer=answer,
+                answer=answer_result["text"],
                 sources=sources,
                 confidence=confidence,
                 session=session,
                 document_id=document_id,
                 max_chapter=max_chapter,
                 include_reference=include_reference,
+                llm_provider=answer_result["provider"],
+                llm_calls=total_calls,
             )
 
         except Exception as e:
@@ -223,20 +236,25 @@ class ContextAwareRAG:
 
     def _condense_question(
         self, question: str, prior_messages: List[Dict[str, Any]]
-    ) -> str:
-        """Rewrite the question as a standalone query if there's prior history."""
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """Rewrite the question as a standalone query if there's prior history.
+
+        Returns: (rewritten_query, llm_result) where llm_result is the dict
+        returned by invoke_with_fallback (text/provider/calls) when an LLM was
+        actually called, or None when there's no history (no LLM call made).
+        """
         if not prior_messages:
-            return question
+            return question, None
 
         history_text = _format_history(prior_messages, window=_CONDENSE_HISTORY_WINDOW)
-        rewritten = self._invoke_llm(
+        result = self._invoke_llm(
             _CONDENSE_PROMPT.format(chat_history=history_text, question=question)
-        ).strip()
-        return rewritten or question
+        )
+        rewritten = result["text"].strip()
+        return (rewritten or question), result
 
-    def _invoke_llm(self, prompt_text: str) -> str:
-        response = self.base_rag.llm.invoke(prompt_text)
-        return getattr(response, "content", None) or str(response)
+    def _invoke_llm(self, prompt_text: str) -> Dict[str, Any]:
+        return self.base_rag.invoke_with_fallback(prompt_text)
 
     @staticmethod
     def _format_sources(docs_with_scores) -> List[Dict[str, Any]]:
@@ -269,6 +287,8 @@ class ContextAwareRAG:
         document_id: Optional[int],
         max_chapter: Optional[int],
         include_reference: bool,
+        llm_provider: Optional[str] = None,
+        llm_calls: int = 0,
     ) -> Dict[str, Any]:
         return {
             "answer": answer,
@@ -282,6 +302,8 @@ class ContextAwareRAG:
             "spoiler_filter_active": max_chapter is not None,
             "max_chapter": max_chapter,
             "include_reference": include_reference,
+            "llm_provider": llm_provider,
+            "llm_calls": llm_calls,
         }
 
     def get_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
