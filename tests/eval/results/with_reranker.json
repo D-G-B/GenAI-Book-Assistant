@@ -1,0 +1,144 @@
+{
+  "timestamp": "2026-05-06T21:24:07.088467",
+  "book": "Dune (40th Anniversary Edition) -- Herbert, Frank [Herbert, Frank] -- 2005 -- Ace -- 9d91c136624c7a72fb119c7738835047 -- Anna\u2019s Archive.epub",
+  "stack": {
+    "embeddings": "all-MiniLM-L6-v2",
+    "chunker": "RecursiveCharacterTextSplitter(1000/200)",
+    "reranker": null
+  },
+  "summary": {
+    "metric": "recall@5",
+    "hits": 9,
+    "total": 10,
+    "score": 0.9
+  },
+  "results": [
+    {
+      "question": "Where is the Atreides family originally from before they take stewardship of Arrakis?",
+      "expected_keywords": [
+        "Caladan"
+      ],
+      "matched_keywords": [
+        "caladan"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "What is the spice melange and where is it found?",
+      "expected_keywords": [
+        "melange",
+        "Arrakis"
+      ],
+      "matched_keywords": [
+        "arrakis",
+        "melange"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "Who is Paul Atreides' mother and what order does she belong to?",
+      "expected_keywords": [
+        "Jessica",
+        "Bene Gesserit"
+      ],
+      "matched_keywords": [
+        "bene gesserit",
+        "jessica"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "What giant creatures live in the desert of Arrakis?",
+      "expected_keywords": [
+        "sandworm",
+        "Shai-Hulud",
+        "worm"
+      ],
+      "matched_keywords": [
+        "sandworm",
+        "shai-hulud",
+        "worm"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "Who is the doctor that betrays House Atreides?",
+      "expected_keywords": [
+        "Yueh",
+        "Wellington"
+      ],
+      "matched_keywords": [
+        "wellington",
+        "yueh"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "Who is the Padishah Emperor of the Known Universe?",
+      "expected_keywords": [
+        "Shaddam",
+        "Corrino"
+      ],
+      "matched_keywords": [],
+      "hit": false,
+      "retrieved_count": 5
+    },
+    {
+      "question": "What is the Bene Gesserit's secret breeding program trying to produce?",
+      "expected_keywords": [
+        "Kwisatz Haderach"
+      ],
+      "matched_keywords": [
+        "kwisatz haderach"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "Who is the leader of House Harkonnen?",
+      "expected_keywords": [
+        "Vladimir",
+        "Baron"
+      ],
+      "matched_keywords": [
+        "baron",
+        "vladimir"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "What is a stillsuit and what does it do?",
+      "expected_keywords": [
+        "stillsuit",
+        "moisture",
+        "water"
+      ],
+      "matched_keywords": [
+        "moisture",
+        "stillsuit",
+        "water"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    },
+    {
+      "question": "Who is Stilgar and what group does he lead?",
+      "expected_keywords": [
+        "Stilgar",
+        "Fremen"
+      ],
+      "matched_keywords": [
+        "fremen",
+        "stilgar"
+      ],
+      "hit": true,
+      "retrieved_count": 5
+    }
+  ]
+}

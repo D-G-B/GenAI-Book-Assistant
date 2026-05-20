@@ -1,13 +1,22 @@
 """
 Conversational memory system for context-aware conversations.
 Supports simplified spoiler filtering with optional reference material.
+
+Replaces the deprecated ConversationalRetrievalChain with a direct
+condense-then-retrieve-then-answer flow so we can return real similarity
+scores for retrieved chunks and control retrieval k / filters per-query.
 """
 
-from typing import List, Dict, Any, Optional
+import logging
 from datetime import datetime
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.chains import ConversationalRetrievalChain
+from typing import Any, Dict, List, Optional
+
 from langchain.prompts import PromptTemplate
+
+from app.config import settings
+from app.services.vector_store_manager import VectorStoreManager
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationSession:
@@ -22,12 +31,11 @@ class ConversationSession:
 
     def add_message(self, role: str, content: str):
         """Add a message to the conversation history."""
-        message = {
+        self.messages.append({
             'role': role,
             'content': content,
-            'timestamp': datetime.now()
-        }
-        self.messages.append(message)
+            'timestamp': datetime.now(),
+        })
         self.last_activity = datetime.now()
 
     def get_summary(self) -> Dict[str, Any]:
@@ -37,101 +45,74 @@ class ConversationSession:
             'user_id': self.user_id,
             'created_at': self.created_at.isoformat(),
             'last_activity': self.last_activity.isoformat(),
-            'message_count': len(self.messages)
+            'message_count': len(self.messages),
         }
 
 
 class ConversationMemoryManager:
-    """Manages multiple conversation sessions."""
+    """Manages multiple conversation sessions with bounded retention."""
 
     def __init__(self, max_sessions: int = 100):
         self.sessions: Dict[str, ConversationSession] = {}
         self.max_sessions = max_sessions
 
-    def get_or_create_session(self, session_id: str, user_id: Optional[str] = None) -> ConversationSession:
-        """Get existing session or create a new one."""
+    def get_or_create_session(
+        self, session_id: str, user_id: Optional[str] = None
+    ) -> ConversationSession:
         if session_id not in self.sessions:
             if len(self.sessions) >= self.max_sessions:
                 self._cleanup_oldest_session()
-
             self.sessions[session_id] = ConversationSession(session_id, user_id)
-
         return self.sessions[session_id]
 
     def _cleanup_oldest_session(self):
-        """Remove the oldest session."""
         if not self.sessions:
             return
-
-        oldest_session_id = min(
+        oldest = min(
             self.sessions.keys(),
-            key=lambda sid: self.sessions[sid].last_activity
+            key=lambda sid: self.sessions[sid].last_activity,
         )
-        del self.sessions[oldest_session_id]
+        del self.sessions[oldest]
 
-    def create_memory(self, k: int = 5) -> ConversationBufferWindowMemory:
-        """Create a LangChain memory instance that keeps last k exchanges."""
-        return ConversationBufferWindowMemory(
-            k=k,
-            return_messages=True,
-            memory_key="chat_history",
-            input_key="question",
-            output_key="answer"
-        )
 
-    def create_conversational_chain(self, retriever, llm):
-        """Create a conversational retrieval chain with memory and custom persona."""
+# Rewrite a follow-up question into a standalone query using chat history.
+_CONDENSE_PROMPT = PromptTemplate.from_template(
+    "Given the following conversation about a book or story, and a follow-up "
+    "question, rephrase the follow-up question to be a standalone question. "
+    "Resolve any pronouns (he, she, it, they, his, her) to the specific "
+    "characters, places, or objects mentioned in the chat history.\n\n"
+    "Chat History:\n{chat_history}\n\n"
+    "Follow Up Question: {question}\n\n"
+    "Standalone Question:"
+)
 
-        memory = self.create_memory(k=5)
+_QA_PROMPT = PromptTemplate.from_template(
+    "You are an expert Reading Companion and Lorekeeper.\n"
+    "Your goal is to answer the user's question based ONLY on the context "
+    "provided below.\n\n"
+    "Rules:\n"
+    "1. If the answer is not in the context, say \"I don't know based on the "
+    "available chapters.\"\n"
+    "2. Do not make up facts or use outside knowledge.\n"
+    "3. Be helpful but concise.\n"
+    "4. If the context is from reference material (appendix, glossary), mention that.\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}\n\n"
+    "Answer:"
+)
 
-        # Condense Question Prompt - resolves pronouns using chat history
-        condense_question_template = """
-Given the following conversation about a book or story, and a follow-up question, rephrase the follow-up question to be a standalone question.
-IT IS VITAL TO ensure you resolve any pronouns (he, she, it, they, his, her) to the specific characters, places, or objects mentioned in the chat history.
+# Number of recent exchanges to surface when condensing the question.
+_CONDENSE_HISTORY_WINDOW = 5
 
-Chat History:
-{chat_history}
 
-Follow Up Question: {question}
-
-Standalone Question:"""
-
-        condense_question_prompt = PromptTemplate.from_template(condense_question_template)
-
-        # Answer Generation Prompt
-        qa_template = """You are an expert Reading Companion and Lorekeeper. 
-Your goal is to answer the user's question based ONLY on the context provided below.
-
-Rules:
-1. If the answer is not in the context, say "I don't know based on the available chapters."
-2. Do not make up facts or use outside knowledge.
-3. Be helpful but concise.
-4. If the context is from reference material (appendix, glossary), mention that.
-
-Context:
-{context}
-
-Question: {question}
-
-Answer:"""
-
-        QA_PROMPT = PromptTemplate(
-            template=qa_template,
-            input_variables=["context", "question"]
-        )
-
-        # Create the Chain
-        chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=retriever,
-            memory=memory,
-            condense_question_prompt=condense_question_prompt,
-            combine_docs_chain_kwargs={'prompt': QA_PROMPT},
-            return_source_documents=True,
-            verbose=True
-        )
-
-        return chain
+def _format_history(messages: List[Dict[str, Any]], window: int) -> str:
+    """Render the last `window` exchanges as a transcript for the condense prompt."""
+    recent = messages[-window * 2:] if window else messages
+    lines = []
+    for msg in recent:
+        role = "Human" if msg["role"] == "human" else "Assistant"
+        lines.append(f"{role}: {msg['content']}")
+    return "\n".join(lines)
 
 
 class ContextAwareRAG:
@@ -140,7 +121,6 @@ class ContextAwareRAG:
     def __init__(self, base_rag_service):
         self.base_rag = base_rag_service
         self.memory_manager = ConversationMemoryManager()
-        self.active_chains: Dict[str, Any] = {}
 
     async def ask_with_context(
         self,
@@ -149,19 +129,9 @@ class ContextAwareRAG:
         user_id: Optional[str] = None,
         document_id: Optional[int] = None,
         max_chapter: Optional[int] = None,
-        include_reference: bool = False
+        include_reference: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Ask a question with conversational context.
-
-        Args:
-            question: The question to ask
-            session_id: Conversation session ID
-            user_id: Optional user identifier
-            document_id: Optional document filter
-            max_chapter: Optional spoiler filter (None = full book)
-            include_reference: Include reference material when spoiler filter is on
-        """
+        """Ask a question with conversational context and real similarity scores."""
 
         if not question.strip():
             return {"error": "Question cannot be empty"}
@@ -175,92 +145,144 @@ class ContextAwareRAG:
         try:
             session = self.memory_manager.get_or_create_session(session_id, user_id)
 
-            # Create chain key that includes all filters
-            chain_key = f"{session_id}_{document_id}_{max_chapter}_{include_reference}"
-
-            if chain_key not in self.active_chains:
-                # Get retriever with filters
-                retriever = self.base_rag.vector_store_manager.get_retriever(
-                    k=8,
-                    document_id=document_id,
-                    max_chapter=max_chapter,
-                    include_reference=include_reference
+            filter_info = []
+            if document_id is not None:
+                filter_info.append(f"doc {document_id}")
+            if max_chapter is not None:
+                filter_info.append(f"ch 1-{max_chapter}")
+                if include_reference:
+                    filter_info.append("+ refs")
+            if filter_info:
+                logger.info(
+                    "💬 Conversational search with filters: %s", ", ".join(filter_info)
                 )
 
-                if retriever is None:
-                    return {"error": "Vector store not available"}
+            logger.info(
+                "💬 Conversational question (Session: %s...): %s",
+                session_id[:8], question,
+            )
 
-                # Log filter info
-                filter_info = []
-                if document_id is not None:
-                    filter_info.append(f"doc {document_id}")
-                if max_chapter is not None:
-                    filter_info.append(f"ch 1-{max_chapter}")
-                    if include_reference:
-                        filter_info.append("+ refs")
-
-                if filter_info:
-                    print(f"💬 Conversational search with filters: {', '.join(filter_info)}")
-
-                chain = self.memory_manager.create_conversational_chain(
-                    retriever=retriever,
-                    llm=self.base_rag.llm
-                )
-                self.active_chains[chain_key] = chain
-            else:
-                chain = self.active_chains[chain_key]
-
+            # Record the user turn before retrieval so it shows up in history
+            # even if downstream calls fail.
             session.add_message('human', question)
 
-            print(f"💬 Conversational question (Session: {session_id[:8]}...): {question}")
+            # 1. Resolve pronouns / context into a standalone search query.
+            search_query = self._condense_question(question, session.messages[:-1])
 
-            result = chain({"question": question})
+            # 2. Retrieve with real cosine-style similarity scores.
+            docs_with_scores = self.base_rag.vector_store_manager.search_with_scores(
+                search_query,
+                k=settings.RETRIEVAL_K,
+                document_id=document_id,
+                max_chapter=max_chapter,
+                include_reference=include_reference,
+            )
 
-            answer = result.get('answer', 'No answer generated')
-            source_docs = result.get('source_documents', [])
+            if not docs_with_scores:
+                empty_answer = (
+                    "I couldn't find any relevant passages for that question "
+                    "given the current filters."
+                )
+                session.add_message('assistant', empty_answer)
+                return self._build_response(
+                    answer=empty_answer,
+                    sources=[],
+                    confidence=None,
+                    session=session,
+                    document_id=document_id,
+                    max_chapter=max_chapter,
+                    include_reference=include_reference,
+                )
 
-            sources = []
-            for i, doc in enumerate(source_docs):
-                source_info = {
-                    "document_title": doc.metadata.get('document_title', 'Unknown'),
-                    "chunk_index": doc.metadata.get('chunk_index', i),
-                    "similarity_score": 0.85
-                }
-
-                chapter_num = doc.metadata.get('chapter_number')
-                chapter_title = doc.metadata.get('chapter_title')
-                is_ref = doc.metadata.get('is_reference', False)
-
-                if chapter_title:
-                    source_info['chapter_title'] = chapter_title
-                if chapter_num:
-                    source_info['chapter_number'] = chapter_num
-                if is_ref:
-                    source_info['is_reference'] = True
-
-                sources.append(source_info)
-
+            # 3. Generate the answer from the retrieved chunks.
+            context = "\n\n".join(doc.page_content for doc, _ in docs_with_scores)
+            answer = self._invoke_llm(
+                _QA_PROMPT.format(context=context, question=question)
+            )
             session.add_message('assistant', answer)
 
-            return {
-                "answer": answer,
-                "sources": sources,
-                "confidence": 0.8,
-                "chunks_used": len(sources),
-                "session_id": session_id,
-                "conversation_length": len(session.messages),
-                "context_used": len(session.messages) > 2,
-                "filtered_to_document": document_id,
-                "spoiler_filter_active": max_chapter is not None,
-                "max_chapter": max_chapter,
-                "include_reference": include_reference
-            }
+            sources = self._format_sources(docs_with_scores)
+            valid_scores = [
+                s["similarity_score"] for s in sources if s["similarity_score"] is not None
+            ]
+            confidence = sum(valid_scores) / len(valid_scores) if valid_scores else None
+
+            return self._build_response(
+                answer=answer,
+                sources=sources,
+                confidence=confidence,
+                session=session,
+                document_id=document_id,
+                max_chapter=max_chapter,
+                include_reference=include_reference,
+            )
 
         except Exception as e:
-            print(f"❌ Error in conversational question: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("Error in conversational question")
             return {"error": str(e)}
+
+    def _condense_question(
+        self, question: str, prior_messages: List[Dict[str, Any]]
+    ) -> str:
+        """Rewrite the question as a standalone query if there's prior history."""
+        if not prior_messages:
+            return question
+
+        history_text = _format_history(prior_messages, window=_CONDENSE_HISTORY_WINDOW)
+        rewritten = self._invoke_llm(
+            _CONDENSE_PROMPT.format(chat_history=history_text, question=question)
+        ).strip()
+        return rewritten or question
+
+    def _invoke_llm(self, prompt_text: str) -> str:
+        response = self.base_rag.llm.invoke(prompt_text)
+        return getattr(response, "content", None) or str(response)
+
+    @staticmethod
+    def _format_sources(docs_with_scores) -> List[Dict[str, Any]]:
+        sources: List[Dict[str, Any]] = []
+        for i, (doc, raw_score) in enumerate(docs_with_scores):
+            source_info: Dict[str, Any] = {
+                "document_title": doc.metadata.get('document_title', 'Unknown'),
+                "chunk_index": doc.metadata.get('chunk_index', i),
+                "similarity_score": VectorStoreManager.normalize_score(raw_score),
+            }
+            chapter_num = doc.metadata.get('chapter_number')
+            chapter_title = doc.metadata.get('chapter_title')
+            is_ref = doc.metadata.get('is_reference', False)
+            if chapter_title:
+                source_info['chapter_title'] = chapter_title
+            if chapter_num:
+                source_info['chapter_number'] = chapter_num
+            if is_ref:
+                source_info['is_reference'] = True
+            sources.append(source_info)
+        return sources
+
+    @staticmethod
+    def _build_response(
+        *,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        confidence: Optional[float],
+        session: ConversationSession,
+        document_id: Optional[int],
+        max_chapter: Optional[int],
+        include_reference: bool,
+    ) -> Dict[str, Any]:
+        return {
+            "answer": answer,
+            "sources": sources,
+            "confidence": confidence,
+            "chunks_used": len(sources),
+            "session_id": session.session_id,
+            "conversation_length": len(session.messages),
+            "context_used": len(session.messages) > 2,
+            "filtered_to_document": document_id,
+            "spoiler_filter_active": max_chapter is not None,
+            "max_chapter": max_chapter,
+            "include_reference": include_reference,
+        }
 
     def get_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
         """Get conversation history for a session."""
@@ -272,7 +294,7 @@ class ContextAwareRAG:
             {
                 'role': msg['role'],
                 'content': msg['content'],
-                'timestamp': msg['timestamp'].isoformat()
+                'timestamp': msg['timestamp'].isoformat(),
             }
             for msg in session.messages
         ]
@@ -281,27 +303,20 @@ class ContextAwareRAG:
         """Clear a conversation session."""
         if session_id in self.memory_manager.sessions:
             del self.memory_manager.sessions[session_id]
-
-        keys_to_delete = [k for k in self.active_chains.keys() if k.startswith(session_id)]
-        for key in keys_to_delete:
-            del self.active_chains[key]
-
         return True
 
     def list_active_sessions(self) -> List[Dict[str, Any]]:
         """List all active conversation sessions."""
-        return [
-            session.get_summary()
-            for session in self.memory_manager.sessions.values()
-        ]
+        return [s.get_summary() for s in self.memory_manager.sessions.values()]
 
 
 # Global instance
 context_aware_rag = None
 
+
 def initialize_context_aware_rag(base_rag_service):
     """Initialize the context-aware RAG system."""
     global context_aware_rag
     context_aware_rag = ContextAwareRAG(base_rag_service)
-    print("✅ Conversational RAG initialized")
+    logger.info("✅ Conversational RAG initialized")
     return context_aware_rag

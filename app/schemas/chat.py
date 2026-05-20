@@ -17,7 +17,10 @@ class ChatSource(BaseModel):
     """Represents a single chunk of text used to answer a question."""
     document_title: str
     chunk_index: int
-    similarity_score: float
+    # Cosine similarity in [0, 1]. Optional because callers that don't pass
+    # through search_with_scores (legacy paths, manually constructed responses)
+    # may omit it.
+    similarity_score: Optional[float] = None
     chapter_title: Optional[str] = None
     chapter_number: Optional[int] = None
     is_reference: Optional[bool] = None  # True if from glossary/appendix
@@ -26,7 +29,8 @@ class ChatResponse(BaseModel):
     """Standard response for Simple Q&A."""
     answer: str
     sources: List[ChatSource]
-    confidence: float
+    # Mean of source similarity scores; None when scores aren't available.
+    confidence: Optional[float] = None
     chunks_used: int
     error: Optional[str] = None
     # Spoiler info

@@ -19,6 +19,7 @@ SIMPLIFIED SPOILER MODEL:
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
+import logging
 import re
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -30,6 +31,8 @@ from app.database import LoreDocument
 from app.services.vector_store_manager import VectorStoreManager
 from app.services.advanced_document_loaders import document_processor
 
+logger = logging.getLogger(__name__)
+
 
 class DocumentManager:
     """
@@ -38,7 +41,7 @@ class DocumentManager:
     """
 
     def __init__(self, vector_store_manager: VectorStoreManager):
-        print("🚀 Initializing Document Manager...")
+        logger.info("🚀 Initializing Document Manager...")
 
         self.vector_store_manager = vector_store_manager
 
@@ -62,7 +65,7 @@ class DocumentManager:
         # Load existing state
         self._load_manifest()
 
-        print("✅ Document Manager initialized")
+        logger.info("✅ Document Manager initialized")
 
     # =========================================================================
     # MANIFEST MANAGEMENT (FIXED - now preserves full metadata)
@@ -80,7 +83,7 @@ class DocumentManager:
                     self.processed_documents = {
                         int(k): v for k, v in data['documents'].items()
                     }
-                    print(f"📋 Loaded manifest: {len(self.processed_documents)} documents (full metadata)")
+                    logger.info("📋 Loaded manifest: %d documents (full metadata)", len(self.processed_documents))
                 # LEGACY FORMAT: just IDs (migrate to new format)
                 elif 'processed_document_ids' in data:
                     processed_ids = data.get('processed_document_ids', [])
@@ -90,11 +93,13 @@ class DocumentManager:
                             'chunk_count': 0,
                             'total_chapters': None
                         }
-                    print(
-                        f"📋 Loaded legacy manifest: {len(self.processed_documents)} documents (needs rebuild for metadata)")
+                    logger.info(
+                        "📋 Loaded legacy manifest: %d documents (needs rebuild for metadata)",
+                        len(self.processed_documents),
+                    )
 
-            except Exception as e:
-                print(f"⚠️ Could not load manifest: {e}")
+            except (OSError, json.JSONDecodeError):
+                logger.exception("Could not load manifest")
 
     def _save_manifest(self):
         """Save the current state of processed documents to disk (FULL METADATA)."""
@@ -113,9 +118,9 @@ class DocumentManager:
             with open(self.manifest_path, 'w') as f:
                 json.dump(manifest_data, f, indent=2)
 
-            print(f"📋 Manifest saved: {len(self.processed_documents)} documents (full metadata)")
-        except Exception as e:
-            print(f"⚠️ Failed to save manifest: {e}")
+            logger.info("📋 Manifest saved: %d documents (full metadata)", len(self.processed_documents))
+        except OSError:
+            logger.exception("Failed to save manifest")
 
     def is_processed(self, document_id: int) -> bool:
         """Check if a document ID has already been processed."""
@@ -131,7 +136,7 @@ class DocumentManager:
         """
         # 1. Restore if previously soft-deleted
         if self.vector_store_manager.is_deleted(document_id):
-            print(f"♻️  Document {document_id} was previously soft-deleted. Restoring...")
+            logger.info("♻️  Document %d was previously soft-deleted. Restoring...", document_id)
 
             self.vector_store_manager.deleted_document_ids.discard(document_id)
             self.vector_store_manager._save_deleted_ids()
@@ -144,7 +149,7 @@ class DocumentManager:
                 self.processed_documents[document_id] = existing
                 self._save_manifest()
 
-            print(f"✅ Document {document_id} restored")
+            logger.info("✅ Document %d restored", document_id)
             return True
 
         # 2. Skip if already active (but check if metadata is complete)
@@ -152,7 +157,7 @@ class DocumentManager:
             existing = self.processed_documents.get(document_id, {})
             # If we have real metadata, skip; if migrated from legacy, allow reprocess
             if not existing.get('migrated_from_legacy'):
-                print(f"⏭️  Document {document_id} already processed, skipping")
+                logger.info("⏭️  Document %d already processed, skipping", document_id)
                 return True
 
         try:
@@ -160,30 +165,30 @@ class DocumentManager:
             db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
 
             if not db_doc or not db_doc.content:
-                print(f"❌ Document {document_id} not found or has no content")
+                logger.error("Document %d not found or has no content", document_id)
                 return False
 
-            print(f"📄 Processing: {db_doc.title} ({db_doc.filename})")
+            logger.info("📄 Processing: %s (%s)", db_doc.title, db_doc.filename)
 
             # Check for extraction errors
             if db_doc.content.startswith('[') and 'extraction failed' in db_doc.content.lower():
-                print(f"⚠️ Skipping document with failed extraction")
+                logger.warning("Skipping document with failed extraction")
                 return False
 
             # 4. Process and Chunk
             chunks = await self._process_and_chunk(db_doc)
 
             if not chunks:
-                print(f"❌ No valid chunks created from document {document_id}")
+                logger.error("No valid chunks created from document %d", document_id)
                 return False
 
-            print(f"✅ Created {len(chunks)} chunks")
+            logger.info("✅ Created %d chunks", len(chunks))
 
             # 5. Add to Vector Store
             success = self.vector_store_manager.add_documents(chunks)
 
             if not success:
-                print(f"❌ Failed to add chunks to vector store")
+                logger.error("Failed to add chunks to vector store")
                 return False
 
             # 6. Calculate max chapter from body chunks
@@ -211,14 +216,12 @@ class DocumentManager:
 
             self._save_manifest()
 
-            print(f"✅ Document {document_id} fully processed and synced")
-            print(f"   📖 Max Chapter: {max_chapter}, Reference chunks: {reference_chunks}")
+            logger.info("✅ Document %d fully processed and synced", document_id)
+            logger.info("   📖 Max Chapter: %s, Reference chunks: %d", max_chapter, reference_chunks)
             return True
 
-        except Exception as e:
-            print(f"❌ Error adding document {document_id}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Error adding document %d", document_id)
             return False
 
     # =========================================================================
@@ -362,10 +365,10 @@ class DocumentManager:
         chapters = self._detect_chapters_in_content(content)
 
         if len(chapters) >= 2:
-            print(f"   📖 Detected {len(chapters)} sections in content")
+            logger.info("   📖 Detected %d sections in content", len(chapters))
             return self._chunk_with_chapters(content, chapters, base_metadata)
         else:
-            print("   ⚠️ No chapter structure detected, using flat chunking")
+            logger.info("   ⚠️ No chapter structure detected, using flat chunking")
             return self._chunk_flat(content, base_metadata)
 
     def _chunk_with_chapters(
@@ -484,14 +487,14 @@ class DocumentManager:
             db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
 
             if not db_doc:
-                print(f"⚠️ Document {document_id} not found in database")
+                logger.warning("Document %d not found in database", document_id)
                 return False
 
             doc_title = db_doc.title
 
             db.delete(db_doc)
             db.commit()
-            print(f"🗑️ Removed document {document_id} from database")
+            logger.info("🗑️ Removed document %d from database", document_id)
 
             self.vector_store_manager.soft_delete_document(document_id)
 
@@ -499,11 +502,11 @@ class DocumentManager:
                 del self.processed_documents[document_id]
                 self._save_manifest()
 
-            print(f"✅ Document '{doc_title}' (ID: {document_id}) fully deleted")
+            logger.info("✅ Document '%s' (ID: %d) fully deleted", doc_title, document_id)
             return True
 
-        except Exception as e:
-            print(f"❌ Error deleting document {document_id}: {e}")
+        except Exception:
+            logger.exception("Error deleting document %d", document_id)
             db.rollback()
             return False
 
@@ -512,7 +515,7 @@ class DocumentManager:
         try:
             db.query(LoreDocument).delete()
             db.commit()
-            print("🗑️ Cleared all documents from database")
+            logger.info("🗑️ Cleared all documents from database")
 
             self.vector_store_manager.clear_all()
 
@@ -520,23 +523,23 @@ class DocumentManager:
             if self.manifest_path.exists():
                 self.manifest_path.unlink()
 
-            print("✅ All documents deleted from all systems")
+            logger.info("✅ All documents deleted from all systems")
             return True
 
-        except Exception as e:
-            print(f"❌ Error deleting all documents: {e}")
+        except Exception:
+            logger.exception("Error deleting all documents")
             db.rollback()
             return False
 
     async def rebuild_index(self, db: Session) -> bool:
         """Rebuild the vector store index from scratch."""
         try:
-            print("🔄 Starting index rebuild...")
+            logger.info("🔄 Starting index rebuild...")
 
             all_db_docs = db.query(LoreDocument).all()
 
             if not all_db_docs:
-                print("⚠️ No documents in database to rebuild from")
+                logger.warning("No documents in database to rebuild from")
                 self.vector_store_manager.vector_store = None
                 self.processed_documents.clear()
                 self._save_manifest()
@@ -551,7 +554,7 @@ class DocumentManager:
                 if not db_doc.content:
                     continue
 
-                print(f"   Processing: {db_doc.title}")
+                logger.info("   Processing: %s", db_doc.title)
                 chunks = await self._process_and_chunk(db_doc)
 
                 if chunks:
@@ -577,13 +580,11 @@ class DocumentManager:
                     }
 
             self._save_manifest()
-            print(f"✅ Index rebuilt: {len(self.processed_documents)} documents")
+            logger.info("✅ Index rebuilt: %d documents", len(self.processed_documents))
             return True
 
-        except Exception as e:
-            print(f"❌ Error rebuilding index: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Error rebuilding index")
             return False
 
     def get_document_status(self, document_id: int) -> Dict[str, Any]:

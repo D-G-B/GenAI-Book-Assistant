@@ -3,13 +3,18 @@ FastAPI router for document management endpoints
 Now supports EPUB files.
 """
 
+import logging
+import os
+import tempfile
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
+
 from app.database import get_db
 from app.schemas.documents import DocumentCreate, DocumentResponse
-from typing import Optional
-import tempfile
-import os
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -83,17 +88,17 @@ async def upload_file(
 
         # === PDF FILES ===
         elif file_extension == 'pdf':
-            print(f"📄 Processing PDF: {file.filename}")
+            logger.info("📄 Processing PDF: %s", file.filename)
             content = await _extract_pdf_content(file_content, file.filename)
 
         # === WORD DOCUMENTS ===
         elif file_extension in ['docx', 'doc']:
-            print(f"📄 Processing Word document: {file.filename}")
+            logger.info("📄 Processing Word document: %s", file.filename)
             content = await _extract_word_content(file_content, file.filename, file_extension)
 
         # === EPUB FILES ===
         elif file_extension == 'epub':
-            print(f"📚 Processing EPUB: {file.filename}")
+            logger.info("📚 Processing EPUB: %s", file.filename)
             content = await _extract_epub_content(file_content, file.filename)
 
         # === DATA FILES ===
@@ -103,7 +108,7 @@ async def upload_file(
         else:
             try:
                 content = file_content.decode('utf-8')
-            except:
+            except UnicodeDecodeError:
                 content = f"[Unsupported file type: {file.filename}]"
 
         # Create document record
@@ -118,13 +123,13 @@ async def upload_file(
         db.commit()
         db.refresh(new_doc)
 
-        print(f"✅ Document '{title}' saved to database (ID: {new_doc.id})")
+        logger.info("✅ Document '%s' saved to database (ID: %d)", title, new_doc.id)
 
         # Process through document manager
         success = await enhanced_rag_service.document_manager.add_document(db, new_doc.id)
 
         if not success:
-            print(f"⚠️ Document saved but processing failed")
+            logger.warning("Document saved but processing failed")
             raise HTTPException(status_code=400, detail="Document uploaded but processing failed")
 
         return new_doc
@@ -133,9 +138,7 @@ async def upload_file(
         raise
     except Exception as e:
         db.rollback()
-        print(f"❌ Failed to upload file: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Failed to upload file")
         raise HTTPException(status_code=400, detail=f"Failed to upload file: {str(e)}")
 
 
@@ -155,11 +158,11 @@ async def _extract_pdf_content(file_content: bytes, filename: str) -> str:
 
         if not content.strip():
             return "[PDF processed but no text content extracted]"
-        print(f"✅ Extracted {len(content):,} characters from PDF")
+        logger.info("✅ Extracted %s characters from PDF", f"{len(content):,}")
         return content
 
     except Exception as e:
-        print(f"❌ Error extracting PDF: {e}")
+        logger.exception("Error extracting PDF")
         return f"[PDF extraction failed: {str(e)}]"
     finally:
         if os.path.exists(temp_path):
@@ -180,11 +183,11 @@ async def _extract_word_content(file_content: bytes, filename: str, ext: str) ->
 
         if not content.strip():
             return "[Word document processed but no text content extracted]"
-        print(f"✅ Extracted {len(content):,} characters from Word document")
+        logger.info("✅ Extracted %s characters from Word document", f"{len(content):,}")
         return content
 
     except Exception as e:
-        print(f"❌ Error extracting Word document: {e}")
+        logger.exception("Error extracting Word document")
         return f"[Word extraction failed: {str(e)}]"
     finally:
         if os.path.exists(temp_path):
@@ -215,12 +218,12 @@ async def _extract_epub_content(file_content: bytes, filename: str) -> str:
             book_title = t[0][0] if t else None
             a = book.get_metadata('DC', 'creator')
             book_author = a[0][0] if a else None
-        except:
+        except (IndexError, KeyError, AttributeError):
             pass
 
         book_title = book_title or filename
         book_author = book_author or 'Unknown'
-        print(f"📖 EPUB: {book_title} by {book_author}")
+        logger.info("📖 EPUB: %s by %s", book_title, book_author)
 
         # Get reading order
         spine_ids = [item[0] for item in book.spine]
@@ -273,12 +276,12 @@ async def _extract_epub_content(file_content: bytes, filename: str) -> str:
         if not content.strip():
             return "[EPUB processed but no text content extracted]"
 
-        print(f"✅ Extracted {len(content):,} characters from {chapter_num} sections")
+        logger.info("✅ Extracted %s characters from %d sections", f"{len(content):,}", chapter_num)
         return content
 
     except ImportError:
         # Fallback
-        print("⚠️ ebooklib not available, trying UnstructuredEPubLoader...")
+        logger.warning("ebooklib not available, trying UnstructuredEPubLoader...")
         try:
             from langchain_community.document_loaders import UnstructuredEPubLoader
             loader = UnstructuredEPubLoader(temp_path, mode="single")
@@ -291,9 +294,7 @@ async def _extract_epub_content(file_content: bytes, filename: str) -> str:
             return f"[EPUB extraction failed: {str(e)}]"
 
     except Exception as e:
-        print(f"❌ Error extracting EPUB: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error extracting EPUB")
         return f"[EPUB extraction failed: {str(e)}]"
 
     finally:
@@ -345,7 +346,7 @@ async def rebuild_index(db: Session = Depends(get_db)):
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     try:
-        print("🔄 Starting index rebuild...")
+        logger.info("🔄 Starting index rebuild...")
         success = await enhanced_rag_service.document_manager.rebuild_index(db)
         if not success:
             raise HTTPException(status_code=400, detail="Index rebuild failed")
@@ -353,9 +354,10 @@ async def rebuild_index(db: Session = Depends(get_db)):
         stats = enhanced_rag_service.document_manager.get_stats()
         return {"message": "Index rebuilt successfully", "stats": stats}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Failed to rebuild index")
         raise HTTPException(status_code=400, detail=f"Failed to rebuild index: {str(e)}")
 
 

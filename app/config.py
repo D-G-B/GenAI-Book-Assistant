@@ -1,8 +1,11 @@
+import logging
 import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class Settings:
     # API Keys
@@ -20,6 +23,19 @@ class Settings:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1000"))
 
+    # Retrieval Settings
+    RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "8"))
+    LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
+    LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+    # Reranker Settings
+    # Cross-encoder reranker reorders top-N FAISS candidates for better recall
+    # on proper-noun and lexically-mismatched queries. Set RERANKER_ENABLED=False
+    # to disable (e.g. low-memory environments).
+    RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "True").lower() == "true"
+    RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+    RERANK_POOL_SIZE = int(os.getenv("RERANK_POOL_SIZE", "30"))
+
     def validate_api_keys(self):
         """
         Check if the api keys are present
@@ -33,8 +49,7 @@ class Settings:
             missing_keys.append("GOOGLE_API_KEY")
 
         if missing_keys:
-            print(f"⚠️  Warning: Missing API keys: {', '.join(missing_keys)}")
-            print("Add them to your .env file to use those models")
+            logger.warning("Missing API keys: %s. Add them to your .env to use those models.", ", ".join(missing_keys))
 
         return len(missing_keys) == 0
 

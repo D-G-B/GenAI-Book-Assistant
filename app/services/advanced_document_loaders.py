@@ -3,10 +3,13 @@ Advanced document loaders for different file types using LangChain.
 Now includes EPUB support for e-books.
 """
 
+import logging
 import os
 import tempfile
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from langchain.schema import Document
 from langchain_community.document_loaders import (
@@ -37,14 +40,14 @@ class EpubLoader:
             from ebooklib import epub
             self.ebooklib_available = True
         except ImportError:
-            print("⚠️ ebooklib not available. Install with: pip install ebooklib")
+            logger.warning("ebooklib not available. Install with: pip install ebooklib")
 
         # Check for BeautifulSoup (needed to parse HTML from epub)
         try:
             from bs4 import BeautifulSoup
             self.bs4_available = True
         except ImportError:
-            print("⚠️ BeautifulSoup not available. Install with: pip install beautifulsoup4")
+            logger.warning("BeautifulSoup not available. Install with: pip install beautifulsoup4")
 
         # Check for unstructured fallback
         try:
@@ -163,14 +166,14 @@ class EpubLoader:
                             metadata=chapter_metadata
                         ))
 
-            print(f"✅ Loaded EPUB with {len(documents)} chapters using ebooklib")
+            logger.info("✅ Loaded EPUB with %d chapters using ebooklib", len(documents))
             return documents
 
-        except Exception as e:
-            print(f"⚠️ Error loading EPUB with ebooklib: {e}")
+        except Exception:
+            logger.exception("Error loading EPUB with ebooklib")
             # Try fallback
             if self.unstructured_available:
-                print("   Trying UnstructuredEPubLoader fallback...")
+                logger.info("   Trying UnstructuredEPubLoader fallback...")
                 return self._load_with_unstructured(file_path, metadata)
             raise
 
@@ -220,11 +223,11 @@ class EpubLoader:
                 doc.metadata['source_type'] = 'epub'
                 doc.metadata['element_index'] = i
 
-            print(f"✅ Loaded EPUB with {len(docs)} elements using UnstructuredEPubLoader")
+            logger.info("✅ Loaded EPUB with %d elements using UnstructuredEPubLoader", len(docs))
             return docs
 
-        except Exception as e:
-            print(f"❌ Error loading EPUB with unstructured: {e}")
+        except Exception:
+            logger.exception("Error loading EPUB with unstructured")
             raise
 
 
@@ -279,8 +282,8 @@ class MultiFormatDocumentLoader:
                 if os.path.exists(temp_path):
                     os.unlink(temp_path)
 
-        except Exception as e:
-            print(f"❌ Error loading document {filename}: {str(e)}")
+        except Exception:
+            logger.exception("Error loading document %s", filename)
             # Fallback to simple text document
             return [Document(page_content=content, metadata=metadata)]
 
@@ -294,8 +297,8 @@ class MultiFormatDocumentLoader:
 
             return self.supported_formats[file_ext](file_path, metadata)
 
-        except Exception as e:
-            print(f"❌ Error loading file {file_path}: {str(e)}")
+        except Exception:
+            logger.exception("Error loading file %s", file_path)
             raise
 
     def load_from_bytes(self, content: bytes, filename: str, metadata: Dict[str, Any]) -> List[Document]:
@@ -416,7 +419,7 @@ class WebDocumentLoader:
             self.WebBaseLoader = WebBaseLoader
             self.available = True
         except ImportError:
-            print("⚠️ WebBaseLoader not available. Install with: pip install beautifulsoup4")
+            logger.warning("WebBaseLoader not available. Install with: pip install beautifulsoup4")
             self.available = False
 
     def load_from_url(self, url: str, metadata: Dict[str, Any]) -> List[Document]:
@@ -436,8 +439,8 @@ class WebDocumentLoader:
 
             return documents
 
-        except Exception as e:
-            print(f"❌ Error loading URL {url}: {str(e)}")
+        except Exception:
+            logger.exception("Error loading URL %s", url)
             raise
 
 

@@ -1,0 +1,10 @@
+{"question": "Where is the Atreides family originally from before they take stewardship of Arrakis?", "expected_chapter": 1, "expected_chunks_contain_keywords": ["Caladan"]}
+{"question": "What is the spice melange and where is it found?", "expected_chapter": 1, "expected_chunks_contain_keywords": ["melange", "Arrakis"]}
+{"question": "Who is Paul Atreides' mother and what order does she belong to?", "expected_chapter": 1, "expected_chunks_contain_keywords": ["Jessica", "Bene Gesserit"]}
+{"question": "What giant creatures live in the desert of Arrakis?", "expected_chapter": null, "expected_chunks_contain_keywords": ["sandworm", "Shai-Hulud", "worm"]}
+{"question": "Who is the doctor that betrays House Atreides?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Yueh", "Wellington"]}
+{"question": "Who is the Padishah Emperor of the Known Universe?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Shaddam", "Corrino"]}
+{"question": "What is the Bene Gesserit's secret breeding program trying to produce?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Kwisatz Haderach"]}
+{"question": "Who is the leader of House Harkonnen?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Vladimir", "Baron"]}
+{"question": "What is a stillsuit and what does it do?", "expected_chapter": null, "expected_chunks_contain_keywords": ["stillsuit", "moisture", "water"]}
+{"question": "Who is Stilgar and what group does he lead?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Stilgar", "Fremen"]}
