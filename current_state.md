@@ -113,6 +113,34 @@ Roughly the order I'd attack things, but each is its own commit-able unit:
 5. **CI**: GitHub Actions running `uv sync` + `pytest` on PR.
 6. **Streaming responses**: switch `llm.invoke()` to `llm.astream()` and pipe through FastAPI's `StreamingResponse`.
 
+## OAuth2 options (expanding Phase 2 item 2)
+
+Notes on how hard auth actually is here. Today there's zero auth — every endpoint is public and
+the `User` model in `app/database.py` is defined but unwired. OAuth2 is an *authorization*
+framework: a trusted provider (Google/GitHub) vouches for identity so we never store passwords.
+Standard web flow is the Authorization Code flow (login redirect → provider → callback with a
+short-lived code → backend swaps it for an access token → we issue our own session/JWT).
+
+Ranked easiest → most control:
+
+1. **Managed provider (Auth0 / Clerk / Supabase Auth)** — easiest. ~20 lines + a JS widget; they
+   own token storage, refresh, social logins, MFA. Free tiers exist. Cost: vendor dependency.
+2. **`fastapi-users` with an OAuth2 backend** — *the path already named in Phase 2 item 2.*
+   Gives us login UI hooks, `/me`, cookie+JWT sessions, and pluggable OAuth2 providers
+   (Google/GitHub) without vendor lock-in. Integrates cleanly with our SQLAlchemy `User` model.
+   Best fit given the existing stack.
+3. **`authlib` social login (Google/GitHub) by hand** — more wiring than `fastapi-users` but
+   maximum transparency; store only `oauth_provider` + `oauth_id` + email/name.
+4. **Self-hosted IdP (Keycloak)** — enterprise SSO, heavy ops overhead, overkill here.
+
+**Recommendation:** stick with the Phase 2 plan — `fastapi-users` + a Google OAuth2 backend.
+It should be done *after* the multi-tenancy refactor (item 1), since auth is only useful once
+documents/conversations carry a `user_id` to scope against.
+
+Rough effort: ~half to a full day, mostly new files (auth routes + `get_current_user` dependency,
+`SessionMiddleware` registration, login/logout UI in `templates/index.html` + `static/js/app.js`,
+Google OAuth2 app credentials in a new `.env.example`).
+
 ## Run commands you'll want again
 
 ```bash
