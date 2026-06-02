@@ -59,6 +59,19 @@ b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chu
 | Recall@5 with reranker | 0.90 (9/10) |
 | `grep -r "print(" app/` | empty |
 
+## Known issues (bugs to fix)
+
+- **Titled-only chapters silently break spoiler protection.** `_detect_chapters_in_content`
+  (`document_manager.py:231`) relies on regex patterns that require the word "Chapter" (or
+  equivalent) in the heading. Books that use title-only chapter headings (e.g. "The Gathering
+  Storm", "A Meeting at Dusk") return `< 2` matches, causing `_process_and_chunk` to fall
+  through to `_chunk_flat` (line 418), which stamps `chapter_number=1` on every chunk. The
+  spoiler filter then treats the whole book as chapter 1 — silently allowing any chapter's
+  content to appear regardless of the user's `max_chapter` setting.
+  **Planned fix:** evaluate a PageIndex-style LLM-based heading extractor as a smarter
+  alternative (see plan in `.claude/plans/`); if that doesn't resolve it, patch the regex to
+  accept standalone title-cased lines as chapter boundaries.
+
 ## Known quirks (deliberately left)
 
 These are documented behaviors, not bugs:
