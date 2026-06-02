@@ -112,6 +112,27 @@ def run_detector(docs, detector_name: str, mock: bool) -> Dict[str, Any]:
     }
 
 
+def _llm_preflight() -> bool:
+    """Return True if a live LLM call succeeds; print clear guidance if not."""
+    from app.services.enhanced_rag_service import enhanced_rag_service
+    try:
+        enhanced_rag_service.invoke_with_fallback('Reply with the single word: ok')
+        return True
+    except Exception as exc:
+        print(
+            "\nABORTING: no LLM provider succeeded, so the LLM run would be all "
+            "zeros and tell us nothing.\n"
+            f"  Last error: {exc}\n\n"
+            "  Check .env: a key must be valid AND the model id current. Common causes:\n"
+            "   - Google: a 404 'model not found' means the key is fine but the model id\n"
+            "     is stale. Try DEFAULT_GEMINI_MODEL=gemini-2.0-flash (no 'models/' prefix).\n"
+            "   - OpenAI 401 'project archived' / Anthropic 401 'invalid x-api-key': dead keys.\n\n"
+            "  (Existing chapter_llm.json was left untouched.)",
+            file=sys.stderr,
+        )
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Regex vs LLM chapter detection")
     parser.add_argument("--mock-fixture", action="store_true",
@@ -121,6 +142,13 @@ def main():
 
     docs = load_dataset()
     print(f"Scoring {len(docs)} documents\n")
+
+    # Preflight: on a live run, confirm at least one LLM provider actually works
+    # before scoring. Otherwise every doc silently returns [] and we'd write a
+    # misleading llm=0.00 artifact that looks like "the LLM failed the task"
+    # rather than "no LLM ever ran (auth/config problem)".
+    if not args.mock_fixture and not _llm_preflight():
+        return 1
 
     regex_out = run_detector(docs, "regex", mock=args.mock_fixture)
     llm_out = run_detector(docs, "llm", mock=args.mock_fixture)
