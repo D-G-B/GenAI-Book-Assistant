@@ -1,0 +1,66 @@
+{
+  "timestamp": "2026-06-02T20:26:25.256955",
+  "detector": "regex",
+  "mode": "live",
+  "summary": {
+    "boundary_precision": 0.75,
+    "boundary_recall": 0.5833333333333334,
+    "boundary_f1": 0.625,
+    "chapter_number_accuracy": 0.75,
+    "is_reference_accuracy": 0.75
+  },
+  "results": [
+    {
+      "name": "arabic_numbered",
+      "score": {
+        "boundary_precision": 1.0,
+        "boundary_recall": 1.0,
+        "boundary_f1": 1.0,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 2,
+        "predicted": 2,
+        "expected": 2
+      }
+    },
+    {
+      "name": "numbered_with_glossary",
+      "score": {
+        "boundary_precision": 1.0,
+        "boundary_recall": 1.0,
+        "boundary_f1": 1.0,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 3,
+        "predicted": 3,
+        "expected": 3
+      }
+    },
+    {
+      "name": "titled_only",
+      "score": {
+        "boundary_precision": 0.0,
+        "boundary_recall": 0.0,
+        "boundary_f1": 0.0,
+        "chapter_number_accuracy": 0.0,
+        "is_reference_accuracy": 0.0,
+        "matched": 0,
+        "predicted": 0,
+        "expected": 3
+      }
+    },
+    {
+      "name": "titled_with_afterword",
+      "score": {
+        "boundary_precision": 1.0,
+        "boundary_recall": 0.3333333333333333,
+        "boundary_f1": 0.5,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 1,
+        "predicted": 1,
+        "expected": 3
+      }
+    }
+  ]
+}
