@@ -71,9 +71,28 @@ b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chu
   **Planned fix:** evaluate a PageIndex-style LLM-based heading extractor as a smarter
   alternative (see plan in `.claude/plans/`); if that doesn't resolve it, patch the regex to
   accept standalone title-cased lines as chapter boundaries.
-  **Status:** standalone experiment built (`app/services/llm_chapter_detector.py` + head-to-head
-  eval in `tests/eval/run_chapter_eval.py`). Awaiting a live-LLM run to get the real
-  regex-vs-LLM delta before deciding integration.
+  **Status (2026-06-12): measured live, hybrid detector wins outright.** Three detectors
+  scored against synthetic fixtures plus a hand-labelled real book (Dune 40th-Anniversary
+  epub: 48 narrative chapters + 39 reference units; fixture gitignored — regenerate via
+  `tests/eval/build_dune_fixture.py`). Real-book row:
+
+  | Dune row | regex | LLM-solo | hybrid |
+  |---|---|---|---|
+  | boundary_f1 | 0.90 | 0.18 | **1.00** |
+  | chapter_number_accuracy | 0.11 | 1.00 (on matches) | **1.00** |
+  | is_reference_accuracy | 0.55 | 1.00 (on matches) | **1.00** |
+
+  Regex finds boundaries only via the epub extractor's `=== Section N ===` artifacts and
+  mis-numbers everything (+4 shift, zero reference flags); LLM-solo labels perfectly but
+  can't tell which bare heading lines are chapters (it picks the ToC). The **hybrid**
+  (`detect_chapters_hybrid`: regex-found marker anchors + ONE small LLM call that labels
+  each anchor seeing a ~120-char snippet of following text) scored 1.00 on every metric,
+  live, via GitHub Models gpt-4o-mini — ~5k tokens per book (~$0.002/book), 10x smaller
+  than an LLM-solo prompt and the only variant that fits the PAT's 8k request cap.
+  **Next gate: integration decision** — wire `detect_chapters_hybrid` into ingest with
+  regex fallback (and optionally skip the LLM call when regex finds genuine author
+  `Chapter N` headings, making well-formed books free). Eval re-runs need
+  `MAX_TOKENS=8000` and `--sleep 15` (Gemini free tier: 5 req/min, 20 req/day).
 
 The following were found in a codebase sanity sweep (2026-06); none are fixed yet:
 

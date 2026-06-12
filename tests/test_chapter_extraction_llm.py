@@ -8,7 +8,10 @@ import json
 
 from app.services.llm_chapter_detector import (
     detect_chapters_llm,
+    detect_chapters_hybrid,
     heading_candidates,
+    hybrid_anchors,
+    _build_hybrid_prompt,
     _parse_llm_json_array,
 )
 from tests.eval.chapter_metrics import score_detection, resolve_offsets
@@ -114,6 +117,59 @@ def test_no_candidates_returns_empty_without_calling_llm():
     content = "This is just one long flowing sentence with no headings to speak of."
     assert detect_chapters_llm(content, invoke=tracking) == []
     assert called == []  # short-circuited before the LLM call
+
+
+# ---------- hybrid detector ----------
+
+MARKED_BOOK = (
+    "=== Section 1 ===\n\nTable of Contents\n\nChapter One\nChapter Two\n\n"
+    "=== Section 2 ===\n\nA quote about beginnings.\nTHE STORY opened on a cold morning.\n\n"
+    "=== Section 3 ===\n\nAnother epigraph here.\nTHE STORY continued apace.\n\n"
+    "=== Glossary ===\n\nABA: a loose robe.\n"
+)
+
+
+def test_hybrid_anchors_prefers_section_markers():
+    anchors = hybrid_anchors(MARKED_BOOK)
+    titles = [t for _, t in anchors]
+    assert titles == ["=== Section 1 ===", "=== Section 2 ===",
+                      "=== Section 3 ===", "=== Glossary ==="]
+    # Offsets must point at the marker lines, not at ToC copies of anything.
+    assert anchors[1][0] == MARKED_BOOK.index("=== Section 2 ===")
+
+
+def test_hybrid_anchors_falls_back_to_heading_candidates():
+    content = "The Gathering Storm\nbody text here.\n\nA Meeting at Dusk\nmore body."
+    assert hybrid_anchors(content) == heading_candidates(content)
+
+
+def test_hybrid_prompt_includes_following_snippet():
+    anchors = hybrid_anchors(MARKED_BOOK)
+    prompt = _build_hybrid_prompt(anchors, MARKED_BOOK)
+    # The body text after each marker is what lets the LLM tell a ToC section
+    # from a narrative chapter — it must appear next to the anchor line.
+    assert "2: === Section 2 ===  >> A quote about beginnings." in prompt
+
+
+def test_hybrid_reconciles_ids_to_marker_offsets():
+    resp = json.dumps([
+        {"id": 2, "title": "=== Section 2 ===", "chapter_number": 1, "is_reference": False},
+        {"id": 3, "title": "=== Section 3 ===", "chapter_number": 2, "is_reference": False},
+        {"id": 4, "title": "=== Glossary ===", "chapter_number": None, "is_reference": True},
+    ])
+    out = detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke(resp))
+    assert [c["chapter_number"] for c in out] == [1, 2, None]
+    assert out[0]["start"] == MARKED_BOOK.index("=== Section 2 ===")
+    assert out[2]["is_reference"] is True
+
+
+def test_hybrid_failure_returns_empty():
+    assert detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke("totally broken")) == []
+
+    def boom(_prompt):
+        raise RuntimeError("provider down")
+
+    assert detect_chapters_hybrid(MARKED_BOOK, invoke=boom) == []
 
 
 # ---------- chapter_metrics ----------

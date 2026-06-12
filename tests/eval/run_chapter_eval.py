@@ -14,6 +14,7 @@ Usage (from project root):
 Artifacts:
     tests/eval/results/chapter_regex.json
     tests/eval/results/chapter_llm.json
+    tests/eval/results/chapter_hybrid.json
 """
 
 import argparse
@@ -45,15 +46,22 @@ def llm_detect(text: str, invoke=None) -> List[Dict[str, Any]]:
     return detect_chapters_llm(text, invoke=invoke)
 
 
-def make_mock_invoke(expected: List[Dict[str, Any]], text: str):
+def hybrid_detect(text: str, invoke=None) -> List[Dict[str, Any]]:
+    from app.services.llm_chapter_detector import detect_chapters_hybrid
+    return detect_chapters_hybrid(text, invoke=invoke)
+
+
+def make_mock_invoke(expected: List[Dict[str, Any]], text: str, detector_name: str = "llm"):
     """A canned invoke() that 'detects' exactly the ground truth for one doc.
 
     Lets --mock-fixture exercise the full harness + metric deterministically
-    without keys. It maps each expected heading to its candidate id so the
+    without keys. It maps each expected heading to its anchor id (heading
+    candidates for the llm detector, hybrid_anchors for the hybrid) so each
     detector's id-reconciliation path is genuinely exercised.
     """
-    from app.services.llm_chapter_detector import heading_candidates
-    cands = heading_candidates(text)
+    from app.services.llm_chapter_detector import heading_candidates, hybrid_anchors
+    anchor_fn = hybrid_anchors if detector_name == "hybrid" else heading_candidates
+    cands = anchor_fn(text)
     title_to_id = {t: i for i, (_, t) in enumerate(cands, start=1)}
 
     items = []
@@ -99,8 +107,9 @@ def run_detector(docs, detector_name: str, mock: bool, sleep: float = 0.0) -> Di
         else:
             if sleep and not mock:
                 time.sleep(sleep)  # space out live calls (free-tier requests/min limits)
-            invoke = make_mock_invoke(expected, text) if mock else None
-            predicted = llm_detect(text, invoke=invoke)
+            detect = hybrid_detect if detector_name == "hybrid" else llm_detect
+            invoke = make_mock_invoke(expected, text, detector_name) if mock else None
+            predicted = detect(text, invoke=invoke)
 
         score = score_detection(predicted, expected, text)
         scores.append(score)
@@ -109,7 +118,7 @@ def run_detector(docs, detector_name: str, mock: bool, sleep: float = 0.0) -> Di
     return {
         "timestamp": datetime.now().isoformat(),
         "detector": detector_name,
-        "mode": "mock-fixture" if (mock and detector_name == "llm") else "live",
+        "mode": "mock-fixture" if (mock and detector_name != "regex") else "live",
         "summary": aggregate(scores),
         "results": per_doc,
     }
@@ -158,20 +167,22 @@ def main():
 
     regex_out = run_detector(docs, "regex", mock=args.mock_fixture)
     llm_out = run_detector(docs, "llm", mock=args.mock_fixture, sleep=args.sleep)
+    hybrid_out = run_detector(docs, "hybrid", mock=args.mock_fixture, sleep=args.sleep)
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
-    (args.results_dir / "chapter_regex.json").write_text(
-        json.dumps(regex_out, indent=2), encoding="utf-8")
-    (args.results_dir / "chapter_llm.json").write_text(
-        json.dumps(llm_out, indent=2), encoding="utf-8")
+    for filename, out in (("chapter_regex.json", regex_out),
+                          ("chapter_llm.json", llm_out),
+                          ("chapter_hybrid.json", hybrid_out)):
+        (args.results_dir / filename).write_text(
+            json.dumps(out, indent=2), encoding="utf-8")
 
-    rf1 = regex_out["summary"].get("boundary_f1", 0.0)
-    lf1 = llm_out["summary"].get("boundary_f1", 0.0)
-    rnum = regex_out["summary"].get("chapter_number_accuracy", 0.0)
-    lnum = llm_out["summary"].get("chapter_number_accuracy", 0.0)
+    def _s(out, key):
+        return out["summary"].get(key, 0.0)
 
-    print(f"boundary_f1:             regex {rf1:.2f}  ->  llm {lf1:.2f}")
-    print(f"chapter_number_accuracy: regex {rnum:.2f}  ->  llm {lnum:.2f}")
+    for key, label in (("boundary_f1", "boundary_f1:            "),
+                       ("chapter_number_accuracy", "chapter_number_accuracy:")):
+        print(f"{label} regex {_s(regex_out, key):.2f}  ->  llm {_s(llm_out, key):.2f}"
+              f"  ->  hybrid {_s(hybrid_out, key):.2f}")
     print(f"\nArtifacts written to {args.results_dir}")
     return 0
 

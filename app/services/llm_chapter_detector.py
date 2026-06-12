@@ -20,10 +20,19 @@ Design notes:
   client (`enhanced_rag_service.invoke_with_fallback`).
 - Any failure (LLM error, bad JSON, nothing usable) returns [] so callers can
   fall back to the regex result. We never raise.
+- Two variants are measured head-to-head by the eval: `detect_chapters_llm`
+  (LLM picks boundaries AND labels them, from bare heading lines) and
+  `detect_chapters_hybrid` (boundaries come deterministically from the ingest
+  extractor's `=== ... ===` markers; the LLM only labels each anchor, seeing a
+  short snippet of the text that follows it). The hybrid exists because the
+  real-book eval showed boundary selection is what the LLM fails at — its
+  labelling of found boundaries was perfect — and anchoring shrinks the prompt
+  ~10x.
 """
 
 import json
 import logging
+import re
 from typing import Callable, List, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -32,6 +41,15 @@ logger = logging.getLogger(__name__)
 _MAX_HEADING_LEN = 80
 _MAX_HEADING_WORDS = 12
 _SENTENCE_ENDINGS = (".", ",", ";", ":")
+
+# Section markers stamped by the ingest extractors (one per epub spine item; see
+# documents_routes._extract_epub_content). When present they ARE the document's
+# section boundaries, so the hybrid detector anchors on them instead of asking
+# the LLM to pick boundaries out of heading-shaped noise.
+_MARKER_RE = re.compile(r"^===\s*.+?\s*===\s*$", re.MULTILINE)
+
+# How much following body text to show the LLM per anchor (whitespace-collapsed).
+_SNIPPET_LEN = 120
 
 
 def heading_candidates(content: str) -> List[Tuple[int, str]]:
@@ -116,6 +134,42 @@ def _default_invoke(prompt: str) -> Dict:
     return enhanced_rag_service.invoke_with_fallback(prompt)
 
 
+def _reconcile(parsed: list, anchors: List[Tuple[int, str]], content: str) -> List[Dict]:
+    """Map LLM-returned items back to authoritative anchor offsets.
+
+    Using the id avoids the classic bug where content.find(title) matches a copy
+    of the title inside body prose rather than the real heading. Items with no
+    locatable position are dropped.
+    """
+    detected: List[Dict] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        idx = item.get("id")
+        offset: Optional[int] = None
+        title = item.get("title")
+
+        if isinstance(idx, int) and 1 <= idx <= len(anchors):
+            offset, title = anchors[idx - 1]
+        elif isinstance(title, str):
+            found = content.find(title)
+            offset = found if found != -1 else None
+
+        if offset is None:
+            continue  # not locatable — drop it
+
+        ch_num = item.get("chapter_number")
+        detected.append({
+            "start": offset,
+            "title": title,
+            "chapter_number": ch_num if isinstance(ch_num, int) else None,
+            "is_reference": bool(item.get("is_reference", False)),
+        })
+
+    detected.sort(key=lambda c: c["start"])
+    return detected
+
+
 def detect_chapters_llm(
     content: str,
     invoke: Optional[Callable[[str], Dict]] = None,
@@ -142,37 +196,100 @@ def detect_chapters_llm(
         if not parsed:
             return []
 
-        # Map returned ids back to authoritative candidate offsets. Using the id
-        # avoids the classic bug where content.find(title) matches a copy of the
-        # title inside body prose rather than the real heading.
-        detected: List[Dict] = []
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            idx = item.get("id")
-            offset: Optional[int] = None
-            title = item.get("title")
-
-            if isinstance(idx, int) and 1 <= idx <= len(candidates):
-                offset, title = candidates[idx - 1]
-            elif isinstance(title, str):
-                found = content.find(title)
-                offset = found if found != -1 else None
-
-            if offset is None:
-                continue  # not locatable — drop it
-
-            ch_num = item.get("chapter_number")
-            detected.append({
-                "start": offset,
-                "title": title,
-                "chapter_number": ch_num if isinstance(ch_num, int) else None,
-                "is_reference": bool(item.get("is_reference", False)),
-            })
-
-        detected.sort(key=lambda c: c["start"])
-        return detected
+        return _reconcile(parsed, candidates, content)
 
     except Exception:
         logger.exception("LLM chapter detection failed; returning empty result")
+        return []
+
+
+# ---------- Hybrid detector: deterministic anchors + one LLM labelling call ----------
+
+def hybrid_anchors(content: str) -> List[Tuple[int, str]]:
+    """Return (char_offset, line_text) anchors for the hybrid detector.
+
+    Prefers the ingest extractor's `=== ... ===` section markers when at least
+    two are present (epub uploads); otherwise falls back to heading_candidates()
+    so PDF / plain-text documents still work.
+    """
+    markers = [(m.start(), m.group(0).strip()) for m in _MARKER_RE.finditer(content)]
+    if len(markers) >= 2:
+        return markers
+    return heading_candidates(content)
+
+
+def _snippet_after(content: str, offset: int) -> str:
+    """First ~_SNIPPET_LEN chars of body text after the line at `offset`.
+
+    Whitespace-collapsed so multi-line epigraphs read as one phrase. Empty
+    string when the line is the last thing in the document.
+    """
+    line_end = content.find("\n", offset)
+    if line_end == -1:
+        return ""
+    window = content[line_end : line_end + 5 * _SNIPPET_LEN]
+    return " ".join(window.split())[:_SNIPPET_LEN]
+
+
+def _build_hybrid_prompt(anchors: List[Tuple[int, str]], content: str) -> str:
+    """Build the labelling prompt: each anchor line plus its following text."""
+    numbered = "\n".join(
+        f"{i}: {line}  >> {_snippet_after(content, off) or '(no following text)'}"
+        for i, (off, line) in enumerate(anchors, start=1)
+    )
+    return (
+        "You are labelling the section structure of an ingested book. Each line "
+        "below is a section anchor, prefixed with a numeric ID; after '>>' come "
+        "the first words of the text that follows that anchor in the book. "
+        "Anchors like '=== Section 12 ===' are file-section markers stamped by "
+        "our ebook extractor — they often mark real chapters, but their numbers "
+        "count files, not chapters.\n\n"
+        "Classify EVERY anchor as one of:\n"
+        "- Front matter (table of contents, title/copyright page, dedication, "
+        "lists of the author's other books): OMIT it from the output.\n"
+        "- Narrative chapter: include it with chapter_number = its position in "
+        "story order (1, 2, 3, ...). NEVER copy a number out of the anchor "
+        "line itself.\n"
+        "- Reference / back matter (appendix, glossary or terminology, maps or "
+        "cartographic notes, afterword, about the author — and the sections "
+        "that continue them): include it with chapter_number null and "
+        "is_reference true.\n\n"
+        "Return ONLY a JSON array, with no prose and no markdown fences:\n"
+        '[{"id": <int>, "title": "<verbatim anchor line>", "chapter_number": '
+        '<int|null>, "is_reference": <true|false>}, ...]\n\n'
+        "Anchors:\n"
+        f"{numbered}\n"
+    )
+
+
+def detect_chapters_hybrid(
+    content: str,
+    invoke: Optional[Callable[[str], Dict]] = None,
+) -> List[Dict]:
+    """Hybrid detector: regex-found anchors, LLM-labelled. One LLM call per doc.
+
+    Boundary selection is NOT delegated to the LLM (measured boundary recall
+    0.11 on a real book when it picks from bare heading lines): anchors come
+    from hybrid_anchors(), and the LLM only classifies each anchor — front
+    matter (omitted), narrative chapter (story-order numbering), or
+    reference/back matter. Same output shape as the other detectors, sorted by
+    start; [] on any failure so callers can fall back.
+    """
+    try:
+        anchors = hybrid_anchors(content)
+        if not anchors:
+            return []
+
+        invoke_fn = invoke or _default_invoke
+        response = invoke_fn(_build_hybrid_prompt(anchors, content))
+        text = response.get("text", "") if isinstance(response, dict) else str(response)
+
+        parsed = _parse_llm_json_array(text)
+        if not parsed:
+            return []
+
+        return _reconcile(parsed, anchors, content)
+
+    except Exception:
+        logger.exception("Hybrid chapter detection failed; returning empty result")
         return []
