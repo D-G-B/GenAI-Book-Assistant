@@ -4,16 +4,16 @@ A snapshot of where the project sits at the end of the Phase 1 hardening pass.
 
 ## Branch
 
-`cleanup-and-improvement` — 8 commits ahead of `main`. Merge candidate; everything verified locally.
+`claude/upbeat-lovelace-a4qv7` — 9 commits ahead of `main`, all pushed to origin. (The
+Phase 1 work formerly tracked here on `cleanup-and-improvement` is already in `main`.)
+Latest session (2026-06-12):
 
 ```
-ef2cc94 Phase 1A:   gate uvicorn reload on DEBUG, sync uv.lock, ignore .claude/
-9ee7808 Phase 1B.1: project-wide logging, replace print() with loggers, tighten excepts
-55dc8f7 Phase 1B.2: pytest infra + unit tests for spoiler filter, chapter extraction, score normalization
-1c3cd54 Phase 1B.3: tiny retrieval eval + Dune baseline (recall@5 = 0.80)
-210a9e7 Phase 1C.1: replace ConversationalRetrievalChain with direct flow, populate similarity scores
-6608e3a Phase 1C.2: cross-encoder reranker (BAAI/bge-reranker-base), recall@5 0.80 -> 0.90
-b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chunk fallback)
+ffdf97b feat: hybrid chapter detector - regex anchors + one small LLM labelling call
+d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
+6d6bb3e feat: support OPENAI_BASE_URL for GitHub Models PAT
+48f4d6b eval: abort chapter eval loudly when no LLM provider works
+32fc244 experiment: standalone LLM chapter detector + head-to-head eval vs regex
 ```
 
 ## What was hardened
@@ -89,10 +89,34 @@ b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chu
   each anchor seeing a ~120-char snippet of following text) scored 1.00 on every metric,
   live, via GitHub Models gpt-4o-mini — ~5k tokens per book (~$0.002/book), 10x smaller
   than an LLM-solo prompt and the only variant that fits the PAT's 8k request cap.
-  **Next gate: integration decision** — wire `detect_chapters_hybrid` into ingest with
-  regex fallback (and optionally skip the LLM call when regex finds genuine author
-  `Chapter N` headings, making well-formed books free). Eval re-runs need
-  `MAX_TOKENS=8000` and `--sleep 15` (Gemini free tier: 5 req/min, 20 req/day).
+
+  **Next session: wire the hybrid into ingest.** Decided design (2026-06-12):
+
+  - In `DocumentManager._process_and_chunk` (`document_manager.py:365`): call
+    `detect_chapters_hybrid(content)` first; if it returns >= 2 chapters, chunk with that;
+    otherwise fall through to the existing `_detect_chapters_in_content` regex (current
+    behavior preserved — the hybrid already returns `[]` on any LLM failure precisely so
+    this fallback is trivial).
+  - **No "zero-cost tier"** (skipping the LLM when regex finds genuine `Chapter N`
+    headings was considered and rejected). Why: finding chapter headings is not the same
+    as understanding front/back matter. Traced through `_chunk_with_chapters` +
+    `vector_store_manager._build_filter_function`: (a) Foreword/Preface/Prologue/
+    Introduction have no regex pattern, so they land in the "Frontmatter" bucket
+    (`chapter_number=None`) and are blocked whenever spoiler protection is on — safe but
+    invisible; (b) **sequel-preview sections headed "Chapter 1" get chapter_number=1 and
+    leak through every max_chapter setting** — a real spoiler hole; (c) part-relative
+    numbering ("Part II, Chapter 1") collides the same way. All three are semantic calls
+    the hybrid's LLM pass makes correctly; at ~$0.002/book once at ingest the saving is
+    not worth the leak.
+  - Integration prerequisites: `invoke_with_fallback` caps output at `settings.MAX_TOKENS`
+    (1000 in .env today) — real-book labelling needs ~2-3k output tokens, so raise
+    MAX_TOKENS in .env or add a per-call override; `_process_and_chunk` is async while the
+    LLM call blocks (acceptable, or wrap in `run_in_executor`); consider a
+    `LLM_CHAPTER_DETECTION_ENABLED` settings flag for opt-out.
+  - Optional, low priority, independent: harden the regex fallback by adding
+    Foreword/Preface/Prologue/Introduction to `reference_patterns`, and note the
+    pattern-priority quirk (a titled `=== ... ===` match within 20 chars beats reference
+    classification — why Dune's appendices weren't flagged).
 
 The following were found in a codebase sanity sweep (2026-06); none are fixed yet:
 
@@ -200,6 +224,25 @@ Rough effort: ~half to a full day, mostly new files (auth routes + `get_current_
 `SessionMiddleware` registration, login/logout UI in `templates/index.html` + `static/js/app.js`,
 Google OAuth2 app credentials in a new `.env.example`).
 
+## Provider / eval environment state (as of 2026-06-12)
+
+What the next session needs to know before running anything live:
+
+- **Google (Gemini, first in fallback order)**: key works, but free tier is **5 requests/min
+  AND 20 requests/day per model** — the daily quota was exhausted on 2026-06-12; it resets
+  daily. 429s name the exact quota violated.
+- **OpenAI (GitHub Models PAT, `OPENAI_BASE_URL=https://models.inference.ai.azure.com`,
+  gpt-4o-mini)**: working — the fine-grained PAT needed the **Models: Read-only** account
+  permission (added 2026-06-12). Hard **8k-token request cap** (413 above it): fits the
+  hybrid detector prompt (~5k tokens) but rejects the LLM-solo prompt (~70k on a real book).
+- **Anthropic**: dead — `400: credit balance too low`. Needs credits to revive.
+- `tests/eval/results/chapter_llm.json` holds the only valid Gemini-measured LLM-solo
+  real-book baseline (Dune boundary_f1 0.18). A rerun while Gemini is quota-dead writes
+  zeros for that row (LLM-solo can't fit through the PAT) — **don't let a provider-failure
+  artifact overwrite it** (restore with `git checkout d659dd7 -- tests/eval/results/chapter_llm.json`).
+- The Dune fixture (`tests/eval/fixtures/dune_chapters.json`) is gitignored (embeds the
+  book text); regenerate from `Books/` with `uv run python -m tests.eval.build_dune_fixture`.
+
 ## Run commands you'll want again
 
 ```bash
@@ -208,6 +251,15 @@ uv run pytest tests/
 
 # Retrieval eval
 uv run python -m tests.eval.run_eval --rebuild
+
+# Chapter-detection eval, live (env var overrides .env; --sleep paces free-tier limits)
+MAX_TOKENS=8000 uv run python -m tests.eval.run_chapter_eval --sleep 15
+
+# Chapter-detection eval, deterministic harness check (no API keys; keep live artifacts safe)
+uv run python -m tests.eval.run_chapter_eval --mock-fixture --results-dir /tmp/chapter_eval_mock
+
+# Rebuild the gitignored real-book fixture from Books/
+uv run python -m tests.eval.build_dune_fixture
 
 # Smoke test imports
 uv run python -c "from main import app; print('OK')"
