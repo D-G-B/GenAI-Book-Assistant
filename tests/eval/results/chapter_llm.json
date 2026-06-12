@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-12T14:47:49.965590",
+  "timestamp": "2026-06-12T15:20:02.374521",
   "detector": "llm",
   "mode": "live",
   "summary": {
-    "boundary_precision": 1.0,
-    "boundary_recall": 1.0,
-    "boundary_f1": 1.0,
+    "boundary_precision": 0.8909090909090909,
+    "boundary_recall": 0.8229885057471265,
+    "boundary_f1": 0.836697247706422,
     "chapter_number_accuracy": 1.0,
     "is_reference_accuracy": 1.0
   },
@@ -60,6 +60,19 @@
         "matched": 3,
         "predicted": 3,
         "expected": 3
+      }
+    },
+    {
+      "name": "dune-real-book (Dune (40th Anniversary Edition) -- Herbe...)",
+      "score": {
+        "boundary_precision": 0.45454545454545453,
+        "boundary_recall": 0.11494252873563218,
+        "boundary_f1": 0.18348623853211007,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 10,
+        "predicted": 22,
+        "expected": 87
       }
     }
   ]

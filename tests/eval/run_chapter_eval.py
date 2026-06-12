@@ -19,6 +19,7 @@ Artifacts:
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -88,7 +89,7 @@ def load_dataset() -> List[Dict[str, Any]]:
 
 # ---------- Run ----------
 
-def run_detector(docs, detector_name: str, mock: bool) -> Dict[str, Any]:
+def run_detector(docs, detector_name: str, mock: bool, sleep: float = 0.0) -> Dict[str, Any]:
     per_doc = []
     scores = []
     for doc in docs:
@@ -96,6 +97,8 @@ def run_detector(docs, detector_name: str, mock: bool) -> Dict[str, Any]:
         if detector_name == "regex":
             predicted = regex_detect(text)
         else:
+            if sleep and not mock:
+                time.sleep(sleep)  # space out live calls (free-tier requests/min limits)
             invoke = make_mock_invoke(expected, text) if mock else None
             predicted = llm_detect(text, invoke=invoke)
 
@@ -137,6 +140,9 @@ def main():
     parser = argparse.ArgumentParser(description="Regex vs LLM chapter detection")
     parser.add_argument("--mock-fixture", action="store_true",
                         help="Feed canned per-doc LLM output (deterministic, no API keys)")
+    parser.add_argument("--sleep", type=float, default=0.0,
+                        help="Seconds to wait before each live LLM call "
+                             "(Gemini free tier allows 5 requests/min)")
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
     args = parser.parse_args()
 
@@ -151,7 +157,7 @@ def main():
         return 1
 
     regex_out = run_detector(docs, "regex", mock=args.mock_fixture)
-    llm_out = run_detector(docs, "llm", mock=args.mock_fixture)
+    llm_out = run_detector(docs, "llm", mock=args.mock_fixture, sleep=args.sleep)
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
     (args.results_dir / "chapter_regex.json").write_text(
