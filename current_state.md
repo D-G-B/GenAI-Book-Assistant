@@ -71,6 +71,33 @@ b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chu
   **Planned fix:** evaluate a PageIndex-style LLM-based heading extractor as a smarter
   alternative (see plan in `.claude/plans/`); if that doesn't resolve it, patch the regex to
   accept standalone title-cased lines as chapter boundaries.
+  **Status:** standalone experiment built (`app/services/llm_chapter_detector.py` + head-to-head
+  eval in `tests/eval/run_chapter_eval.py`). Awaiting a live-LLM run to get the real
+  regex-vs-LLM delta before deciding integration.
+
+The following were found in a codebase sanity sweep (2026-06); none are fixed yet:
+
+- **CRITICAL — `should_rebuild()` ratio formula is wrong** (`vector_store_manager.py:370`).
+  `deleted_ratio = deleted_count / (deleted_count + 10)` doesn't use `total_chunks` at all, so
+  the rebuild trigger almost never fires. Soft-deleted chunks accumulate in the FAISS index
+  indefinitely, degrading retrieval and wasting disk. Fix: `deleted_count / total_chunks`.
+- **`validate_api_keys()` doesn't validate model names** (`config.py:40`). A key without its
+  matching `DEFAULT_*_MODEL` boots cleanly, then every chat request fails at query time.
+- **No file size limit on upload** (`documents_routes.py:82`). `await file.read()` loads the
+  whole file into memory before any check; a huge upload can hang/OOM the server.
+- **Unsupported file types stored as junk content** (`documents_routes.py:112`).
+  `"[Unsupported file type: foo.exe]"` is saved as real document content and later fails
+  downstream during chunking. Should 400 at upload instead.
+- **`JSONLoader(text_content=False)`** (`advanced_document_loaders.py:392`) returns metadata
+  rather than text, likely silently breaking `.json` ingestion. Should be `text_content=True`.
+- **No input bounds on chat** (`chat_routes.py:33`). Question length is unbounded (token
+  waste) and `max_chapter` accepts negative/absurd values.
+- **Nullable DB columns assumed non-null** (`database.py:54`). `content` and `source_type`
+  are nullable but the ingest path dereferences them without checks. `doc_metadata` column is
+  defined but never populated.
+- **Startup reprocessing swallows failure reasons** (`main.py:34`). When `add_document()`
+  returns False at boot, logs say nothing about why.
+- **Unused `BaseLoader` import** (`advanced_document_loaders.py:23`) — dead code.
 
 ## Known quirks (deliberately left)
 
