@@ -115,19 +115,17 @@ class EnhancedRAGService:
             )
 
         if settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
-            providers.append(
-                (
-                    "openai",
-                    ChatOpenAI(
-                        model_name=settings.DEFAULT_OPENAI_MODEL,
-                        openai_api_key=settings.OPENAI_API_KEY,
-                        temperature=0.3,
-                        max_tokens=settings.MAX_TOKENS,
-                        request_timeout=timeout,
-                        max_retries=max_retries,
-                    ),
-                )
+            openai_kwargs = dict(
+                model_name=settings.DEFAULT_OPENAI_MODEL,
+                openai_api_key=settings.OPENAI_API_KEY,
+                temperature=0.3,
+                max_tokens=settings.MAX_TOKENS,
+                request_timeout=timeout,
+                max_retries=max_retries,
             )
+            if settings.OPENAI_BASE_URL:
+                openai_kwargs["base_url"] = settings.OPENAI_BASE_URL
+            providers.append(("openai", ChatOpenAI(**openai_kwargs)))
         if settings.ANTHROPIC_API_KEY and settings.DEFAULT_CLAUDE_MODEL:
             providers.append(
                 (
