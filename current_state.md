@@ -4,9 +4,13 @@ A snapshot of where the project sits at the end of the Phase 1 hardening pass.
 
 ## Branch
 
-`claude/upbeat-lovelace-a4qv7` — 17 commits ahead of `main`. (The Phase 1 work formerly
-tracked here on `cleanup-and-improvement` is already in `main`.)
-Latest session (2026-06-15) — hybrid chapter detector wired into ingest + sanity-sweep fixes:
+**Active: `feat/multi-tenancy`** (forked from `main` for Phase 2 — see "Recommended next move"
+below). The Phase 1 hardening from `claude/upbeat-lovelace-a4qv7` was merged to `main` via
+**PR #3** (`bd81d14`), so `main` now contains everything below.
+
+Phase 1 work (2026-06-15), on the now-merged `claude/upbeat-lovelace-a4qv7` — hybrid chapter
+detector wired into ingest + two sanity sweeps (hardening, dead-code removal, the
+parseable-but-wrong fallback, the per-row `created_at` fix):
 
 ```
 81742d4 fix: model-name validation, dead-code cleanup, startup failure logging
@@ -279,10 +283,22 @@ Honest list of things absent today, ordered by how much they matter for going pu
 
 ## Recommended next move (Phase 2 sketch)
 
-Roughly the order I'd attack things, but each is its own commit-able unit:
+**Status (2026-06-15): Phase 2 is planned and underway on branch `feat/multi-tenancy`**
+(forked from `main` after PR #3 merged the Phase 1 hardening). Decisions locked: do the
+multi-tenancy refactor first behind a stub `get_current_user` (returns a fixed dev user),
+then real Google login via **authlib + a signed-cookie session** — NOT `fastapi-users` (see
+the corrected recommendation below). The full step-by-step handoff is the multi-tenancy + auth
+plan in `.claude/plans/`.
 
-1. **Multi-tenancy refactor**: add `user_id` foreign key on `LoreDocument`, `ChatHistory`, conversation sessions; thread `user_id` through `vector_store_manager` filter; enforce on retrieval.
-2. **Auth**: `fastapi-users` with cookie sessions + JWT. Adds login UI and a `/me` endpoint.
+Roughly the order, each its own commit-able unit:
+
+1. **Multi-tenancy refactor**: add a `user_id` foreign key on `LoreDocument`, stamp `user_id`
+   into chunk metadata at ingest, thread it through `vector_store_manager._build_filter_function`,
+   and enforce on retrieval; scope document list/delete and conversation sessions by user.
+   (Not `ChatHistory` — that schema/table was removed/deferred as dead code.)
+2. **Auth**: **authlib** Google OAuth + a Starlette `SessionMiddleware` signed-cookie session
+   (the cookie rides the existing same-origin `fetch` frontend automatically). Adds
+   login/callback/logout + `/auth/me`, and rewires the `get_current_user` seam from item 1.
 3. **Postgres + Alembic**: switch `DATABASE_URL` from sqlite to postgres; add migrations.
 4. **Dockerfile + Fly.io deploy**: multi-stage build with the embedding model baked in; persistent volume for FAISS; `fly.toml`.
 5. **CI**: GitHub Actions running `uv sync` + `pytest` on PR.
@@ -308,9 +324,15 @@ Ranked easiest → most control:
    maximum transparency; store only `oauth_provider` + `oauth_id` + email/name.
 4. **Self-hosted IdP (Keycloak)** — enterprise SSO, heavy ops overhead, overkill here.
 
-**Recommendation:** stick with the Phase 2 plan — `fastapi-users` + a Google OAuth2 backend.
-It should be done *after* the multi-tenancy refactor (item 1), since auth is only useful once
-documents/conversations carry a `user_id` to scope against.
+**Recommendation (CORRECTED 2026-06-15):** use **option 3 — `authlib` Google OAuth by hand +
+a signed-cookie session** (Starlette `SessionMiddleware` + `itsdangerous`), **not**
+`fastapi-users`. Reason discovered after this section was first written: our SQLAlchemy stack
+is fully *synchronous*, and `fastapi-users`' DB adapter is **async-only** — adopting it would
+bolt an async engine (aiosqlite) onto the sync stack or force a sync→async migration. With
+Google-only login there are no passwords to manage, so `fastapi-users`' batteries are mostly
+unused here. authlib + cookie is the simplest thing that fully works, fits the sync stack, is
+free, and rides the existing same-origin `fetch` frontend. Still done *after* the multi-tenancy
+refactor (item 1), since auth only matters once data carries a `user_id` to scope against.
 
 Rough effort: ~half to a full day, mostly new files (auth routes + `get_current_user` dependency,
 `SessionMiddleware` registration, login/logout UI in `templates/index.html` + `static/js/app.js`,
