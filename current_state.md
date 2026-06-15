@@ -146,7 +146,7 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
     untouched). **Residual gap:** a perfectly *renumbered* tiny subset on the
     `heading_candidates` path (PDF/plain text) still passes, since coverage is only
     checked on the marker path where anchors are reliable. Tests in
-    `test_chapter_extraction_llm.py` + `test_ingest_chapter_detection.py` (suite now 81).
+    `test_chapter_extraction_llm.py` + `test_ingest_chapter_detection.py`.
   - Recover the PAT as a reliable second free endpoint via a sharper detection prompt
     ("omit ONLY title page + ToC; never drop a narrative chapter").
   - Production cost (the only waste is ~13k thinking tokens/book): upgrade
@@ -200,6 +200,38 @@ guarded in code and its schema constraint is deferred (see its note):
   boot loop now checks `add_document`'s return value and logs a per-document warning on failure.
 - ✅ **FIXED (2026-06-15) — Unused `BaseLoader` import** (`advanced_document_loaders.py`) —
   removed.
+
+### Second sanity sweep (2026-06-15, pre-auth)
+
+A read-through before starting auth/multi-tenancy surfaced one live bug, one bounds gap,
+and a layer of dead code left after `DocumentProcessor` was removed. Fixed the live items
+and removed the clearly-dead Python; the dead DB *tables* are deferred (see below).
+
+- ✅ **FIXED — `created_at` default evaluated once at import** (`database.py`).
+  `Column(DateTime(timezone=True), default=datetime.now(timezone.utc))` passed a value
+  computed at import time, so every row shared one timestamp (≈ server start) — user-visible
+  via `DocumentResponse.created_at`. Now `default=lambda: datetime.now(timezone.utc)` on
+  `User` / `LoreDocument` / `LoreQuery`. Regression guard: `tests/test_database_defaults.py`
+  (asserts the column default `is_callable`).
+- ✅ **FIXED — Conversational route missing `ge=1` bounds** (`conversational_routes.py`).
+  The earlier chat-input-bounds fix covered `chat_routes.py` but not the conversational
+  endpoint; `max_chapter` / `document_id` now require `ge=1` there too. Verified live (the
+  route-level bound isn't unit-tested — a `TestClient` test can't run in this env: the
+  installed httpx/starlette versions are incompatible, `Client.__init__() got an unexpected
+  keyword argument`).
+- ✅ **REMOVED — dead Python** (no callers, confirmed by grep): `ChatHistory` schema
+  (`schemas/chat.py`, also the source of the pydantic `model_used` protected-namespace
+  warning), `max_chunks` field on `ChatRequest`, `DocumentChunk` / `DocumentChunkBase`
+  schemas (`schemas/documents.py`), `VectorStoreManager.get_retriever()` (superseded by
+  `search_with_scores`) and `.undelete_document()` (restore is done inline via
+  `deleted_document_ids.discard()` in `document_manager.add_document`).
+- ⏸️ **Deferred to the Postgres/Alembic migration:** the dead DB *tables* `DocumentChunk`
+  (+ `LoreDocument.chunks` relationship) and `LoreQuery`, and the unused `doc_metadata`
+  column. The migration rewrites the schema anyway, so that's where to decide whether they
+  become real (persist chunks / log queries) or get dropped. Chunks currently live only in
+  FAISS; no query logging exists.
+
+Suite: 81 → **84**, ~1.7s, no API keys.
 
 ## Known quirks (deliberately left)
 
