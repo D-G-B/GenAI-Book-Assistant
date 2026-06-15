@@ -181,6 +181,41 @@ def _reconcile(parsed: list, anchors: List[Tuple[int, str]], content: str) -> Li
     return detected
 
 
+def _hybrid_result_is_plausible(
+    detected: List[Dict], anchors: List[Tuple[int, str]], used_markers: bool
+) -> bool:
+    """Sanity-check a complete hybrid result so a degraded one falls back to regex.
+
+    The hybrid detector returns [] on total failure, but a parseable-but-wrong
+    result (the LLM mislabels every anchor) would otherwise pass the caller's
+    `len(chapters) >= 2` gate and drive chunking with bad chapter numbers. Two
+    cheap checks catch the failure modes we've actually seen:
+
+    - Story-order numbering: narrative chapter_numbers (non-reference, non-null),
+      in start order, must equal 1..N exactly. This is the prompt's own contract
+      ("chapter_number = its position in story order"), so a correct result always
+      passes; it rejects duplicates, out-of-order labels, a wrong start, and the
+      documented "LLM copied the number out of the anchor line" failure (numbering
+      '=== Section 2/3 ===' as 2,3 instead of 1,2).
+    - Marker coverage (marker-path only): when anchors are the extractor's
+      '=== ... ===' section markers, dropping more than half of them signals gross
+      over-omission. Skipped on the heading_candidates path, where anchors include
+      heading-shaped noise the LLM legitimately omits.
+    """
+    narrative = [
+        c["chapter_number"]
+        for c in detected
+        if not c["is_reference"] and c["chapter_number"] is not None
+    ]
+    if narrative != list(range(1, len(narrative) + 1)):
+        return False
+
+    if used_markers and len(detected) * 2 < len(anchors):
+        return False
+
+    return True
+
+
 def detect_chapters_llm(
     content: str,
     invoke: Optional[Callable[[str], Dict]] = None,
@@ -307,7 +342,22 @@ def detect_chapters_hybrid(
                 )
             return []
 
-        return _reconcile(parsed, anchors, content)
+        detected = _reconcile(parsed, anchors, content)
+
+        # A parseable-but-wrong result (mislabeled numbering / over-omission) would
+        # otherwise pass the caller's `len >= 2` gate; treat it as a failure so the
+        # caller falls back to regex, and say so loudly rather than silently.
+        used_markers = len(_MARKER_RE.findall(content)) >= 2
+        if not _hybrid_result_is_plausible(detected, anchors, used_markers):
+            logger.warning(
+                "Hybrid chapter labelling looks implausible (%d sections from %d "
+                "anchors; narrative numbering not story-order 1..N or coverage too "
+                "low). Falling back to regex chapter detection.",
+                len(detected), len(anchors),
+            )
+            return []
+
+        return detected
 
     except Exception:
         logger.exception("Hybrid chapter detection failed; returning empty result")

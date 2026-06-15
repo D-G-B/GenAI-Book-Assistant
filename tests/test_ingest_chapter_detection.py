@@ -122,6 +122,32 @@ async def test_process_and_chunk_falls_back_to_regex_on_hybrid_failure():
     assert not any(c.metadata["is_reference"] for c in chunks)
 
 
+# A parseable-but-wrong hybrid result: the LLM copied the marker numbers (Section
+# 2/3 -> chapter 2/3) instead of renumbering to story order. Complete and parseable,
+# so it would pass the len >= 2 gate — but the sanity check rejects it.
+HYBRID_MISLABELED = json.dumps([
+    {"id": 2, "title": "=== Section 2 ===", "chapter_number": 2, "is_reference": False},
+    {"id": 3, "title": "=== Section 3 ===", "chapter_number": 3, "is_reference": False},
+    {"id": 4, "title": "=== Glossary ===", "chapter_number": None, "is_reference": True},
+])
+
+
+async def test_process_and_chunk_falls_back_to_regex_on_implausible_hybrid():
+    """A complete-but-mislabeled hybrid result falls back to the regex detector."""
+    dm = make_dm()
+    dm._detect_chapters_hybrid = functools.partial(
+        DocumentManager._detect_chapters_hybrid, dm, invoke=fake_invoke(HYBRID_MISLABELED)
+    )
+
+    chunks = await dm._process_and_chunk(fake_doc(MARKED_BOOK))
+
+    # The hybrid result was rejected (non-story-order numbering), so regex drove
+    # chunking: it uses the file-section numbers, so chapter 3 appears and the
+    # glossary is not flagged reference (documented regex quirk).
+    assert 3 in chapter_numbers(chunks)
+    assert not any(c.metadata["is_reference"] for c in chunks)
+
+
 async def test_process_and_chunk_skips_hybrid_when_disabled(monkeypatch):
     """LLM_CHAPTER_DETECTION_ENABLED=False: the hybrid detector is never called."""
     monkeypatch.setattr(settings, "LLM_CHAPTER_DETECTION_ENABLED", False)

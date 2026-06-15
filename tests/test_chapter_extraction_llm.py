@@ -173,6 +173,73 @@ def test_hybrid_failure_returns_empty():
     assert detect_chapters_hybrid(MARKED_BOOK, invoke=boom) == []
 
 
+def test_hybrid_accepts_contiguous_story_order():
+    """A correct story-order result (narrative 1..N) passes the sanity check."""
+    resp = json.dumps([
+        {"id": 2, "title": "=== Section 2 ===", "chapter_number": 1, "is_reference": False},
+        {"id": 3, "title": "=== Section 3 ===", "chapter_number": 2, "is_reference": False},
+        {"id": 4, "title": "=== Glossary ===", "chapter_number": None, "is_reference": True},
+    ])
+    out = detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke(resp))
+    assert [c["chapter_number"] for c in out] == [1, 2, None]
+
+
+def test_hybrid_falls_back_on_anchor_number_copying(caplog):
+    """The LLM copying the marker number (Section 2/3 -> ch 2,3) is rejected.
+
+    Narrative numbering [2, 3] isn't story-order 1..N, so the result is treated as
+    a failure ([]) and an actionable warning fires — the documented failure mode
+    where the LLM numbers from the anchor line instead of renumbering.
+    """
+    resp = json.dumps([
+        {"id": 2, "title": "=== Section 2 ===", "chapter_number": 2, "is_reference": False},
+        {"id": 3, "title": "=== Section 3 ===", "chapter_number": 3, "is_reference": False},
+        {"id": 4, "title": "=== Glossary ===", "chapter_number": None, "is_reference": True},
+    ])
+    with caplog.at_level(logging.WARNING):
+        out = detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke(resp))
+    assert out == []
+    assert "implausible" in caplog.text
+
+
+def test_hybrid_falls_back_on_non_monotonic_numbering():
+    """Out-of-order or duplicate narrative numbering is rejected."""
+    out_of_order = json.dumps([
+        {"id": 2, "title": "=== Section 2 ===", "chapter_number": 2, "is_reference": False},
+        {"id": 3, "title": "=== Section 3 ===", "chapter_number": 1, "is_reference": False},
+    ])
+    assert detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke(out_of_order)) == []
+
+    duplicate = json.dumps([
+        {"id": 2, "title": "=== Section 2 ===", "chapter_number": 1, "is_reference": False},
+        {"id": 3, "title": "=== Section 3 ===", "chapter_number": 1, "is_reference": False},
+    ])
+    assert detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke(duplicate)) == []
+
+
+# A book with six section markers, for the marker-coverage check.
+SIX_SECTION_BOOK = "".join(
+    f"=== Section {i} ===\n\nBody text for section {i} goes here in full.\n\n"
+    for i in range(1, 7)
+)
+
+
+def test_hybrid_falls_back_on_marker_over_omission(caplog):
+    """Keeping too few of the section markers (gross over-omission) is rejected.
+
+    Numbering [1, 2] is story-order-valid, so only the marker-coverage check can
+    catch dropping 4 of 6 markers.
+    """
+    resp = json.dumps([
+        {"id": 1, "title": "=== Section 1 ===", "chapter_number": 1, "is_reference": False},
+        {"id": 2, "title": "=== Section 2 ===", "chapter_number": 2, "is_reference": False},
+    ])
+    with caplog.at_level(logging.WARNING):
+        out = detect_chapters_hybrid(SIX_SECTION_BOOK, invoke=fake_invoke(resp))
+    assert out == []
+    assert "implausible" in caplog.text
+
+
 def test_hybrid_warns_on_truncated_output(caplog):
     # An array that opened but never closed (model hit its output-token cap):
     # has '[' and no ']'. Should return [] AND log an actionable warning so the

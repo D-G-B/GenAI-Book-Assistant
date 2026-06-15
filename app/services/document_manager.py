@@ -31,7 +31,6 @@ from langchain.schema import Document
 from app.config import settings
 from app.database import LoreDocument
 from app.services.vector_store_manager import VectorStoreManager
-from app.services.advanced_document_loaders import document_processor
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +59,6 @@ class DocumentManager:
             separators=["\n\n", "\n", ". ", " ", ""],
             length_function=len
         )
-
-        # Handles loading raw content from various file formats (PDF, EPUB, etc.)
-        self.document_processor = document_processor
 
         # Load existing state
         self._load_manifest()
