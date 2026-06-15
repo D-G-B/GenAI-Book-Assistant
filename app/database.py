@@ -44,7 +44,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, unique=True)
     username = Column(String(50), nullable=False, index=True, unique=True)
     email = Column(String(120), nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class LoreDocument(Base):
     __tablename__ = "lore_documents"
@@ -55,7 +55,7 @@ class LoreDocument(Base):
     content = Column(Text)
     source_type = Column(String(50))
     doc_metadata = Column(JSON)
-    created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     chunks = relationship("DocumentChunk", back_populates="document")
 
@@ -79,4 +79,4 @@ class LoreQuery(Base):
     sources = Column(JSON) # list of chunk ids or text
     model_used = Column(String(50))
     cost = Column(Numeric)
-    created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

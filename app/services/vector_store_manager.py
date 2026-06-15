@@ -178,13 +178,6 @@ class VectorStoreManager:
         self._save_deleted_ids()
         logger.info("Soft-deleted document ID: %d", document_id)
 
-    def undelete_document(self, document_id: int):
-        """Restore a soft-deleted document."""
-        if document_id in self.deleted_document_ids:
-            self.deleted_document_ids.remove(document_id)
-            self._save_deleted_ids()
-            logger.info("Restored document ID: %d", document_id)
-
     def is_deleted(self, document_id: int) -> bool:
         """Check if a document is soft-deleted."""
         return document_id in self.deleted_document_ids
@@ -242,32 +235,6 @@ class VectorStoreManager:
             return k * 4
         return k * 2
 
-    def get_retriever(
-        self,
-        k: int = 8,
-        document_id: Optional[int] = None,
-        max_chapter: Optional[int] = None,
-        include_reference: bool = False
-    ):
-        """
-        Get a retriever with filtering support.
-
-        SIMPLIFIED SPOILER MODEL:
-        - max_chapter=None: Return all content (no spoiler filter)
-        - max_chapter=10: Return only chunks where chapter_number <= 10
-        - include_reference=True: Also include chunks where is_reference=True
-        """
-        if self.vector_store is None:
-            return None
-
-        search_kwargs = {
-            "k": k,
-            "fetch_k": self._fetch_k_for(k, document_id, max_chapter),
-            "filter": self._build_filter_function(document_id, max_chapter, include_reference),
-        }
-
-        return self.vector_store.as_retriever(search_kwargs=search_kwargs)
-
     def search_with_scores(
         self,
         query: str,
@@ -278,7 +245,7 @@ class VectorStoreManager:
     ) -> List[Tuple[Document, float]]:
         """
         Retrieve top-k documents along with their FAISS similarity scores,
-        applying the same spoiler/soft-delete filtering as get_retriever().
+        applying spoiler/soft-delete filtering via _build_filter_function().
 
         When a reranker is configured we first pull a wider candidate pool
         (RERANK_POOL_SIZE) and let the cross-encoder reorder it; otherwise
