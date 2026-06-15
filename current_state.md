@@ -4,11 +4,13 @@ A snapshot of where the project sits at the end of the Phase 1 hardening pass.
 
 ## Branch
 
-`claude/upbeat-lovelace-a4qv7` — 12 commits ahead of `main`, all pushed to origin. (The
+`claude/upbeat-lovelace-a4qv7` — 14 commits ahead of `main`, all pushed to origin. (The
 Phase 1 work formerly tracked here on `cleanup-and-improvement` is already in `main`.)
-Latest session (2026-06-15) — hybrid chapter detector wired into ingest:
+Latest session (2026-06-15) — hybrid chapter detector wired into ingest + sanity-sweep fixes:
 
 ```
+c51a1e6 fix: should_rebuild ratio + upload size limit + chat input bounds
+699d9cf doc: mark hybrid chapter detector wired into ingest; record provider findings
 2bba9e6 feat: warn (not silently fall back) when chapter labelling is truncated
 7b78003 feat: use hybrid LLM chapter detector at ingest, regex as fallback
 3798d8e doc: session handoff - hybrid results, integration decision, provider state
@@ -144,23 +146,29 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
     `reference_patterns`, and note the pattern-priority quirk (a titled `=== ... ===` match
     within 20 chars beats reference classification — why Dune's appendices weren't flagged).
 
-The following were found in a codebase sanity sweep (2026-06); none are fixed yet:
+The following were found in a codebase sanity sweep (2026-06). Three were fixed on 2026-06-15
+(commit c51a1e6, marked ✅ below); the rest remain open:
 
-- **CRITICAL — `should_rebuild()` ratio formula is wrong** (`vector_store_manager.py:370`).
-  `deleted_ratio = deleted_count / (deleted_count + 10)` doesn't use `total_chunks` at all, so
-  the rebuild trigger almost never fires. Soft-deleted chunks accumulate in the FAISS index
-  indefinitely, degrading retrieval and wasting disk. Fix: `deleted_count / total_chunks`.
+- ✅ **FIXED (2026-06-15) — CRITICAL `should_rebuild()` ratio formula was wrong**
+  (`vector_store_manager.py`). The old `deleted_count / (deleted_count + 10)` ignored index
+  size and mis-fired; soft-deleted chunks accumulated in FAISS indefinitely. Now compares
+  deleted *chunks* / total chunks — counted from the docstore, since `deleted_document_ids`
+  tracks documents (one document maps to many chunks), so the doc's earlier one-line
+  suggestion `deleted_count / total_chunks` would have mixed units. Tests in
+  `tests/test_should_rebuild.py`.
 - **`validate_api_keys()` doesn't validate model names** (`config.py:40`). A key without its
   matching `DEFAULT_*_MODEL` boots cleanly, then every chat request fails at query time.
-- **No file size limit on upload** (`documents_routes.py:82`). `await file.read()` loads the
-  whole file into memory before any check; a huge upload can hang/OOM the server.
+- ✅ **FIXED (2026-06-15) — No file size limit on upload** (`documents_routes.py`). Reads at
+  most `MAX_UPLOAD_SIZE_MB`+1 bytes and returns 413 if exceeded, so an oversized file is
+  rejected without being fully loaded into memory.
 - **Unsupported file types stored as junk content** (`documents_routes.py:112`).
   `"[Unsupported file type: foo.exe]"` is saved as real document content and later fails
   downstream during chunking. Should 400 at upload instead.
 - **`JSONLoader(text_content=False)`** (`advanced_document_loaders.py:392`) returns metadata
   rather than text, likely silently breaking `.json` ingestion. Should be `text_content=True`.
-- **No input bounds on chat** (`chat_routes.py:33`). Question length is unbounded (token
-  waste) and `max_chapter` accepts negative/absurd values.
+- ✅ **FIXED (2026-06-15) — No input bounds on chat** (`chat_routes.py`, `schemas/chat.py`).
+  Question length capped at `MAX_QUESTION_LENGTH` (422 on overflow); `max_chapter` and
+  `document_id` query params require `ge=1`. Test in `tests/test_input_bounds.py`.
 - **Nullable DB columns assumed non-null** (`database.py:54`). `content` and `source_type`
   are nullable but the ingest path dereferences them without checks. `doc_metadata` column is
   defined but never populated.
@@ -194,7 +202,8 @@ Honest list of things absent today, ordered by how much they matter for going pu
 
 ### Robustness
 - No rate limiting.
-- No request size limits beyond FastAPI defaults.
+- Upload size (`MAX_UPLOAD_SIZE_MB`) and question length (`MAX_QUESTION_LENGTH`) are now
+  bounded; no other request size limits beyond FastAPI defaults.
 - No `.env.example` checked in.
 - No structured request IDs / correlation IDs in logs.
 
