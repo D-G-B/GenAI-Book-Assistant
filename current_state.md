@@ -4,9 +4,17 @@ A snapshot of where the project sits at the end of the Phase 1 hardening pass.
 
 ## Branch
 
-`claude/upbeat-lovelace-a4qv7` — 9 commits ahead of `main`, all pushed to origin. (The
+`claude/upbeat-lovelace-a4qv7` — 12 commits ahead of `main`, all pushed to origin. (The
 Phase 1 work formerly tracked here on `cleanup-and-improvement` is already in `main`.)
-Latest session (2026-06-12):
+Latest session (2026-06-15) — hybrid chapter detector wired into ingest:
+
+```
+2bba9e6 feat: warn (not silently fall back) when chapter labelling is truncated
+7b78003 feat: use hybrid LLM chapter detector at ingest, regex as fallback
+3798d8e doc: session handoff - hybrid results, integration decision, provider state
+```
+
+Prior session (2026-06-12):
 
 ```
 ffdf97b feat: hybrid chapter detector - regex anchors + one small LLM labelling call
@@ -61,7 +69,8 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
 
 ## Known issues (bugs to fix)
 
-- **Titled-only chapters silently break spoiler protection.** `_detect_chapters_in_content`
+- ✅ **RESOLVED (2026-06-15) — Titled-only chapters silently broke spoiler protection.**
+  (Implementation + new findings under "Status" below.) `_detect_chapters_in_content`
   (`document_manager.py:231`) relies on regex patterns that require the word "Chapter" (or
   equivalent) in the heading. Books that use title-only chapter headings (e.g. "The Gathering
   Storm", "A Meeting at Dusk") return `< 2` matches, causing `_process_and_chunk` to fall
@@ -90,33 +99,50 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
   live, via GitHub Models gpt-4o-mini — ~5k tokens per book (~$0.002/book), 10x smaller
   than an LLM-solo prompt and the only variant that fits the PAT's 8k request cap.
 
-  **Next session: wire the hybrid into ingest.** Decided design (2026-06-12):
+  **Status (2026-06-15): WIRED INTO INGEST** (commits 7b78003 + 2bba9e6). In
+  `DocumentManager._process_and_chunk`, `detect_chapters_hybrid(content)` runs first (off
+  the event loop via `run_in_executor`) and chunks with its labels when it returns >= 2
+  chapters; otherwise it falls through to the regex detector (behavior preserved — hybrid
+  returns `[]` on LLM failure). Real Dune ingest now yields story-order chapters **1..48**
+  (was 2..91) with reference material flagged. Suite 59 → 65, no API keys.
 
-  - In `DocumentManager._process_and_chunk` (`document_manager.py:365`): call
-    `detect_chapters_hybrid(content)` first; if it returns >= 2 chapters, chunk with that;
-    otherwise fall through to the existing `_detect_chapters_in_content` regex (current
-    behavior preserved — the hybrid already returns `[]` on any LLM failure precisely so
-    this fallback is trivial).
-  - **No "zero-cost tier"** (skipping the LLM when regex finds genuine `Chapter N`
-    headings was considered and rejected). Why: finding chapter headings is not the same
-    as understanding front/back matter. Traced through `_chunk_with_chapters` +
-    `vector_store_manager._build_filter_function`: (a) Foreword/Preface/Prologue/
-    Introduction have no regex pattern, so they land in the "Frontmatter" bucket
-    (`chapter_number=None`) and are blocked whenever spoiler protection is on — safe but
-    invisible; (b) **sequel-preview sections headed "Chapter 1" get chapter_number=1 and
-    leak through every max_chapter setting** — a real spoiler hole; (c) part-relative
-    numbering ("Part II, Chapter 1") collides the same way. All three are semantic calls
-    the hybrid's LLM pass makes correctly; at ~$0.002/book once at ingest the saving is
-    not worth the leak.
-  - Integration prerequisites: `invoke_with_fallback` caps output at `settings.MAX_TOKENS`
-    (1000 in .env today) — real-book labelling needs ~2-3k output tokens, so raise
-    MAX_TOKENS in .env or add a per-call override; `_process_and_chunk` is async while the
-    LLM call blocks (acceptable, or wrap in `run_in_executor`); consider a
-    `LLM_CHAPTER_DETECTION_ENABLED` settings flag for opt-out.
-  - Optional, low priority, independent: harden the regex fallback by adding
-    Foreword/Preface/Prologue/Introduction to `reference_patterns`, and note the
-    pattern-priority quirk (a titled `=== ... ===` match within 20 chars beats reference
-    classification — why Dune's appendices weren't flagged).
+  Prereqs handled: added `LLM_CHAPTER_DETECTION_ENABLED` (default True) opt-out flag and
+  `LLM_CHAPTER_DETECTION_MAX_TOKENS` (default **16000**, see below) in `config.py`;
+  `invoke_with_fallback` gained a per-call `max_tokens` override applied via `.bind()`
+  (NOT `.copy()`, which drops default-valued fields like `callbacks` on these
+  pydantic-v1-shim models) using helper `_output_cap_kwargs` — `max_tokens` for
+  OpenAI/Anthropic, `generation_config={"max_output_tokens": N}` for Google.
+
+  Design kept as decided 2026-06-12: **no "zero-cost tier"** (skipping the LLM when regex
+  finds `Chapter N` was rejected — sequel-preview "Chapter 1" sections and part-relative
+  numbering leak through `max_chapter` filtering; only the LLM pass classifies front/back
+  matter correctly).
+
+  **New live findings (2026-06-15) that changed the eval-time picture:**
+  - **gemini-2.5-flash (first in fallback) is a thinking model** — its reasoning consumes
+    the output-token budget, so the labelling JSON truncates below ~16k. Hence the 16000
+    default (scored 1.00 on Dune at 16000; truncates → regex fallback below it). Dune used
+    ~15.5k, so headroom is thin for much larger books — a WARNING now fires on truncation
+    naming the env var to raise.
+  - **The GitHub Models PAT (gpt-4o-mini) drifted**: scored 1.00 on 2026-06-12 but 0.17 on
+    2026-06-15 (confirmed stable across 3 runs — over-omits sections). Don't trust a past
+    PAT score to hold; re-measure. Fine for short Q&A.
+  - `gemini-1.5-flash` (404) and `gemini-2.0-flash` (empty) are unavailable on the current
+    free key, so cheap non-thinking Gemini isn't an option here yet.
+
+  Remaining follow-ups (not done):
+  - Close the *parseable-but-wrong* fallback gap: regex fallback only triggers on `[]`
+    (total LLM failure), not on a complete-but-mislabeled LLM result. A cheap sanity check
+    on hybrid output (monotonic numbering / coverage) and/or strengthening the regex
+    detector could let a degraded LLM result fall back.
+  - Recover the PAT as a reliable second free endpoint via a sharper detection prompt
+    ("omit ONLY title page + ToC; never drop a narrative chapter").
+  - Production cost (the only waste is ~13k thinking tokens/book): upgrade
+    `langchain-google-genai` (pinned 1.0.4, predates Gemini 2.5) to control
+    `thinking_budget`, or point detection at a verified cheap non-thinking model.
+  - Optional regex hardening (independent): add Foreword/Preface/Prologue/Introduction to
+    `reference_patterns`, and note the pattern-priority quirk (a titled `=== ... ===` match
+    within 20 chars beats reference classification — why Dune's appendices weren't flagged).
 
 The following were found in a codebase sanity sweep (2026-06); none are fixed yet:
 
@@ -224,17 +250,24 @@ Rough effort: ~half to a full day, mostly new files (auth routes + `get_current_
 `SessionMiddleware` registration, login/logout UI in `templates/index.html` + `static/js/app.js`,
 Google OAuth2 app credentials in a new `.env.example`).
 
-## Provider / eval environment state (as of 2026-06-12)
+## Provider / eval environment state (updated 2026-06-15)
 
 What the next session needs to know before running anything live:
 
 - **Google (Gemini, first in fallback order)**: key works, but free tier is **5 requests/min
-  AND 20 requests/day per model** — the daily quota was exhausted on 2026-06-12; it resets
-  daily. 429s name the exact quota violated.
+  AND 20 requests/day per model**; resets daily. 429s name the exact quota violated.
+  `DEFAULT_GEMINI_MODEL=gemini-2.5-flash` is a **thinking model** — its reasoning eats the
+  output-token budget, so the chapter-labelling call needs `LLM_CHAPTER_DETECTION_MAX_TOKENS`
+  ≈16000 (it scored 1.00 on Dune at 16000; truncates below). `gemini-1.5-flash` (404) and
+  `gemini-2.0-flash` (empty response) are NOT available on this key — no cheap non-thinking
+  Gemini option here yet.
 - **OpenAI (GitHub Models PAT, `OPENAI_BASE_URL=https://models.inference.ai.azure.com`,
-  gpt-4o-mini)**: working — the fine-grained PAT needed the **Models: Read-only** account
-  permission (added 2026-06-12). Hard **8k-token request cap** (413 above it): fits the
-  hybrid detector prompt (~5k tokens) but rejects the LLM-solo prompt (~70k on a real book).
+  gpt-4o-mini)**: reachable, but **quality drifted** — the hybrid detector scored 1.00 via
+  the PAT on 2026-06-12 and only **0.17 on 2026-06-15** (stable across 3 runs; it over-omits
+  sections). Don't assume a past PAT score still holds; re-measure. Still fine for short Q&A.
+  The fine-grained PAT needed the **Models: Read-only** account permission (added 2026-06-12).
+  Hard **8k-token request cap** (413 above it): fits the hybrid detector prompt (~5k tokens)
+  but rejects the LLM-solo prompt (~70k on a real book).
 - **Anthropic**: dead — `400: credit balance too low`. Needs credits to revive.
 - `tests/eval/results/chapter_llm.json` holds the only valid Gemini-measured LLM-solo
   real-book baseline (Dune boundary_f1 0.18). A rerun while Gemini is quota-dead writes
