@@ -134,11 +134,19 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
   - `gemini-1.5-flash` (404) and `gemini-2.0-flash` (empty) are unavailable on the current
     free key, so cheap non-thinking Gemini isn't an option here yet.
 
-  Remaining follow-ups (not done):
-  - Close the *parseable-but-wrong* fallback gap: regex fallback only triggers on `[]`
-    (total LLM failure), not on a complete-but-mislabeled LLM result. A cheap sanity check
-    on hybrid output (monotonic numbering / coverage) and/or strengthening the regex
-    detector could let a degraded LLM result fall back.
+  Remaining follow-ups:
+  - ✅ **DONE (2026-06-15, later) — *parseable-but-wrong* fallback gap closed.**
+    `detect_chapters_hybrid` now sanity-checks a complete result before returning it
+    (`_hybrid_result_is_plausible`): narrative `chapter_number`s must be story-order
+    `1..N` exactly (rejects duplicates, out-of-order labels, and the documented failure
+    of the LLM copying a number out of the `=== Section N ===` anchor line), and on the
+    marker path dropping more than half the `=== ... ===` markers is rejected as gross
+    over-omission. On failure it logs a WARNING and returns `[]`, so the existing regex
+    fallback fires unchanged (`_process_and_chunk`'s `len(chapters) < 2` gate is
+    untouched). **Residual gap:** a perfectly *renumbered* tiny subset on the
+    `heading_candidates` path (PDF/plain text) still passes, since coverage is only
+    checked on the marker path where anchors are reliable. Tests in
+    `test_chapter_extraction_llm.py` + `test_ingest_chapter_detection.py` (suite now 81).
   - Recover the PAT as a reliable second free endpoint via a sharper detection prompt
     ("omit ONLY title page + ToC; never drop a narrative chapter").
   - Production cost (the only waste is ~13k thinking tokens/book): upgrade
@@ -169,11 +177,16 @@ guarded in code and its schema constraint is deferred (see its note):
 - ✅ **FIXED (2026-06-15) — Unsupported file types "junk content"** (`documents_routes.py`).
   The unsupported-extension 400 (the `supported` set check) already runs before the read, so
   the `[Unsupported file type: ...]` branch was unreachable dead code — removed it.
-- ✅ **FIXED (2026-06-15) — `JSONLoader(text_content=False)`** (`advanced_document_loaders.py`)
-  → `text_content=True`. Note: this loader (`DocumentProcessor`) is currently unused by the
-  active ingest path (`.json` uploads are decoded as raw text and chunked), so this is a
-  latent-correctness fix — the whole `DocumentProcessor` is currently dead code worth a
-  future review.
+- ✅ **FIXED then SUPERSEDED (2026-06-15) — `JSONLoader(text_content=False)`**
+  (`advanced_document_loaders.py`) → `text_content=True`, then **the whole module was
+  removed.** `DocumentProcessor` / `MultiFormatDocumentLoader` / `EpubLoader` /
+  `WebDocumentLoader` were a second, diverging copy of the file-format extractors and
+  entirely unused by the active ingest path — the upload route does its own inline
+  PDF/Word/EPUB extraction in `documents_routes.py` (`_extract_pdf_content`,
+  `_extract_word_content`, `_extract_epub_content`); `.json`/`.csv`/text are decoded as raw
+  text. The only link was a dangling import + an assigned-but-never-read
+  `self.document_processor` in `document_manager.py`, both removed. `advanced_document_loaders.py`
+  is deleted, so the latent JSONLoader fix went with it (it was never on the active path).
 - ✅ **FIXED (2026-06-15) — No input bounds on chat** (`chat_routes.py`, `schemas/chat.py`).
   Question length capped at `MAX_QUESTION_LENGTH` (422 on overflow); `max_chapter` and
   `document_id` query params require `ge=1`. Test in `tests/test_input_bounds.py`.
