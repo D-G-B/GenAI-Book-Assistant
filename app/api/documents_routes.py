@@ -11,8 +11,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.config import settings
-from app.database import get_db
+from app.database import User, get_db
 from app.schemas.documents import DocumentCreate, DocumentResponse
 
 logger = logging.getLogger(__name__)
@@ -23,24 +24,30 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 @router.get("/list")
 async def list_documents(
     include_deleted: bool = Query(False, description="Include soft-deleted documents"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """Return a list of all uploaded documents with their status."""
+    """Return a list of the current user's uploaded documents with their status."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     documents = enhanced_rag_service.document_manager.list_all_documents(
         db,
-        include_deleted=include_deleted
+        user_id=current_user.id,
+        include_deleted=include_deleted,
     )
     return documents
 
 
 @router.post("/upload", response_model=DocumentResponse)
-async def upload_document(document: DocumentCreate, db: Session = Depends(get_db)):
+async def upload_document(
+    document: DocumentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Upload a new document for the RAG assistant (JSON format - for API use)."""
     from app.database import LoreDocument
 
-    new_doc = LoreDocument(**document.model_dump())
+    new_doc = LoreDocument(**document.model_dump(), user_id=current_user.id)
 
     try:
         db.add(new_doc)
@@ -56,7 +63,8 @@ async def upload_document(document: DocumentCreate, db: Session = Depends(get_db
 async def upload_file(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload a document file (PDF, TXT, MD, DOCX, EPUB, etc.).
@@ -122,7 +130,8 @@ async def upload_file(
             title=title,
             filename=file.filename,
             content=content,
-            source_type=file_extension
+            source_type=file_extension,
+            user_id=current_user.id,
         )
 
         db.add(new_doc)
@@ -325,11 +334,17 @@ async def delete_all_documents(db: Session = Depends(get_db)):
 
 
 @router.delete("/{document_id}")
-async def delete_document(document_id: int, db: Session = Depends(get_db)):
-    """Delete a document (soft delete)."""
+async def delete_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a document (soft delete). Only the owner may delete it."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
-    success = enhanced_rag_service.document_manager.delete_document(db, document_id)
+    success = enhanced_rag_service.document_manager.delete_document(
+        db, document_id, user_id=current_user.id
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Document not found or deletion failed")
     return {"message": f"Document {document_id} successfully deleted"}
@@ -368,12 +383,19 @@ async def rebuild_index(db: Session = Depends(get_db)):
 
 
 @router.get("/{document_id}/status")
-async def get_document_status(document_id: int, db: Session = Depends(get_db)):
-    """Get the status of a document."""
+async def get_document_status(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the status of a document. Scoped to the owning user."""
     from app.services.enhanced_rag_service import enhanced_rag_service
     from app.database import LoreDocument
 
-    db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
+    db_doc = db.query(LoreDocument).filter(
+        LoreDocument.id == document_id,
+        LoreDocument.user_id == current_user.id,
+    ).first()
     if not db_doc:
         raise HTTPException(status_code=404, detail="Document not found")
 

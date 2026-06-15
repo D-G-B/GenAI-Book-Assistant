@@ -98,12 +98,14 @@ def main():
             db.commit()
             print(f"✅ Updated document ID: {existing.id}")
         else:
-            # Create new document
+            # Create new document (owned by the dev user; user_id is now required)
+            from app.auth import get_or_create_dev_user
             doc = LoreDocument(
                 title="Chronicles of Aethermoor",
                 filename="aethermoor_chronicles.txt",
                 content=complex_content,
-                source_type="text"
+                source_type="text",
+                user_id=get_or_create_dev_user(db).id,
             )
 
             db.add(doc)

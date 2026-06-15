@@ -187,8 +187,9 @@ class VectorStoreManager:
         document_id: Optional[int],
         max_chapter: Optional[int],
         include_reference: bool,
+        user_id: Optional[int] = None,
     ) -> Callable[[Dict[str, Any]], bool]:
-        """Construct the metadata filter for retrieval (spoiler + soft-delete)."""
+        """Construct the metadata filter for retrieval (tenant + spoiler + soft-delete)."""
 
         def filter_function(metadata: Dict[str, Any]) -> bool:
             doc_id = metadata.get("document_id")
@@ -197,7 +198,14 @@ class VectorStoreManager:
             if doc_id in self.deleted_document_ids:
                 return False
 
-            # 2. Filter to specific document if requested.
+            # 2. Multi-tenancy: never return another user's chunks. When user_id
+            #    is set, a chunk must carry the same owner — chunks without a
+            #    user_id (e.g. ingested before this column existed) are blocked
+            #    because we cannot prove they belong to the caller.
+            if user_id is not None and metadata.get("user_id") != user_id:
+                return False
+
+            # 3. Filter to specific document if requested.
             if document_id is not None and doc_id != document_id:
                 return False
 
@@ -242,6 +250,7 @@ class VectorStoreManager:
         document_id: Optional[int] = None,
         max_chapter: Optional[int] = None,
         include_reference: bool = False,
+        user_id: Optional[int] = None,
     ) -> List[Tuple[Document, float]]:
         """
         Retrieve top-k documents along with their FAISS similarity scores,
@@ -258,7 +267,9 @@ class VectorStoreManager:
         if self.vector_store is None:
             return []
 
-        filter_fn = self._build_filter_function(document_id, max_chapter, include_reference)
+        filter_fn = self._build_filter_function(
+            document_id, max_chapter, include_reference, user_id
+        )
 
         retrieve_k = max(k, settings.RERANK_POOL_SIZE) if self.reranker else k
         fetch_k = self._fetch_k_for(retrieve_k, document_id, max_chapter)

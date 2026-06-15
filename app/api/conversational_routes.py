@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from uuid import uuid4
 
-from app.database import get_db
+from app.auth import get_current_user
+from app.database import User, get_db
 from app.schemas.chat import ChatRequest, ConversationResponse
 
 router = APIRouter(prefix="/conversation", tags=["Conversational Chat"])
@@ -18,11 +19,11 @@ router = APIRouter(prefix="/conversation", tags=["Conversational Chat"])
 async def ask_conversational(
         request: ChatRequest,
         session_id: Optional[str] = Query(None, description="Conversation session ID"),
-        user_id: Optional[str] = Query(None, description="User identifier"),
         document_id: Optional[int] = Query(None, ge=1, description="Filter search to specific document"),
         max_chapter: Optional[int] = Query(None, ge=1, description="Spoiler protection: only search up to this chapter"),
         include_reference: bool = Query(False, description="Include reference material when spoiler filter is active"),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
 ):
     """
     Ask a question with conversational memory.
@@ -48,7 +49,7 @@ async def ask_conversational(
     result = await enhanced_rag_service.context_aware_rag.ask_with_context(
         question=request.question,
         session_id=session_id,
-        user_id=user_id,
+        user_id=current_user.id,
         document_id=document_id,
         max_chapter=max_chapter,
         include_reference=include_reference
@@ -61,14 +62,19 @@ async def ask_conversational(
 
 
 @router.get("/history/{session_id}")
-async def get_history(session_id: str):
-    """Get conversation history for a specific session."""
+async def get_history(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Get conversation history for a session owned by the current user."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(status_code=400, detail="Conversational features not available")
 
-    history = enhanced_rag_service.context_aware_rag.get_conversation_history(session_id)
+    history = enhanced_rag_service.context_aware_rag.get_conversation_history(
+        session_id, user_id=current_user.id
+    )
 
     return {
         "session_id": session_id,
@@ -78,14 +84,19 @@ async def get_history(session_id: str):
 
 
 @router.delete("/session/{session_id}")
-async def clear_session(session_id: str):
-    """Clear a conversation session."""
+async def clear_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Clear a conversation session owned by the current user."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(status_code=400, detail="Conversational features not available")
 
-    success = enhanced_rag_service.context_aware_rag.clear_conversation(session_id)
+    success = enhanced_rag_service.context_aware_rag.clear_conversation(
+        session_id, user_id=current_user.id
+    )
 
     if success:
         return {"message": f"Session {session_id} cleared successfully"}
@@ -94,14 +105,16 @@ async def clear_session(session_id: str):
 
 
 @router.get("/sessions")
-async def list_sessions():
-    """List all active conversation sessions."""
+async def list_sessions(current_user: User = Depends(get_current_user)):
+    """List the current user's active conversation sessions."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     if not enhanced_rag_service.context_aware_rag:
         raise HTTPException(status_code=400, detail="Conversational features not available")
 
-    sessions = enhanced_rag_service.context_aware_rag.list_active_sessions()
+    sessions = enhanced_rag_service.context_aware_rag.list_active_sessions(
+        user_id=current_user.id
+    )
 
     return {
         "sessions": sessions,

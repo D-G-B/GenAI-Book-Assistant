@@ -34,6 +34,12 @@ async def lifespan(app: FastAPI):
     # Process any unprocessed documents
     db = SessionLocal()
     try:
+        # Seed the fixed dev user (Increment 1 multi-tenancy stub) so the
+        # LoreDocument.user_id FK is always satisfiable. Find-or-create, so it
+        # stays harmless once Increment 2 swaps the stub for real login.
+        from app.auth import get_or_create_dev_user
+        get_or_create_dev_user(db)
+
         docs = db.query(LoreDocument).all()
         if docs:
             logger.info("📚 Found %d documents in database", len(docs))

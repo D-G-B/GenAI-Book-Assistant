@@ -6,7 +6,8 @@ Supports simplified spoiler filtering with optional reference material.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
-from app.database import get_db
+from app.auth import get_current_user
+from app.database import User, get_db
 from app.schemas.chat import ChatRequest, ChatResponse, ServiceStatus
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -18,7 +19,8 @@ async def ask_question(
     db: Session = Depends(get_db),
     document_id: Optional[int] = Query(None, ge=1, description="Filter search to specific document"),
     max_chapter: Optional[int] = Query(None, ge=1, description="Spoiler protection: only search up to this chapter (None = full book)"),
-    include_reference: bool = Query(False, description="Include reference material (glossary, appendix) when spoiler filter is active")
+    include_reference: bool = Query(False, description="Include reference material (glossary, appendix) when spoiler filter is active"),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Ask a question about the uploaded documents.
@@ -38,7 +40,8 @@ async def ask_question(
             request.question,
             document_id=document_id,
             max_chapter=max_chapter,
-            include_reference=include_reference
+            include_reference=include_reference,
+            user_id=current_user.id,
         )
 
         if "error" in result:

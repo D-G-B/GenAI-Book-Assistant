@@ -50,6 +50,7 @@ class LoreDocument(Base):
     __tablename__ = "lore_documents"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(Text, nullable=False)
     filename = Column(Text, nullable=False)
     content = Column(Text)

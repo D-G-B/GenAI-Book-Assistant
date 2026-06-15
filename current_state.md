@@ -252,8 +252,15 @@ These are documented behaviors, not bugs:
 Honest list of things absent today, ordered by how much they matter for going public:
 
 ### Multi-tenancy / auth
-- No `user_id` on documents, conversations, or vector store metadata.
-- No login. Anyone hitting the API sees everyone's books.
+- ✅ **Increment 1 done (2026-06-15):** `user_id` now lives on `LoreDocument`, on every
+  FAISS chunk's metadata, and on conversation sessions; retrieval / list / delete / session
+  access are all scoped to the owner. Enforced behind a **stub** `get_current_user` (fixed dev
+  user) — see "Phase 2 — Increment 1" below.
+- No real login yet (Increment 2: authlib + Google + cookie session). Behind the stub, every
+  request is still the one dev user, so there is effectively one tenant until Increment 2.
+- Admin/maintenance endpoints are still global (not user-scoped): `POST /documents/{id}/process`,
+  `POST /documents/rebuild-index`, `DELETE /documents/all`. `delete_all` wipes **all** users'
+  documents — a real cross-tenant footgun to gate in Increment 2.
 
 ### Deploy
 - No Dockerfile.
@@ -283,12 +290,51 @@ Honest list of things absent today, ordered by how much they matter for going pu
 
 ## Recommended next move (Phase 2 sketch)
 
-**Status (2026-06-15): Phase 2 is planned and underway on branch `feat/multi-tenancy`**
-(forked from `main` after PR #3 merged the Phase 1 hardening). Decisions locked: do the
-multi-tenancy refactor first behind a stub `get_current_user` (returns a fixed dev user),
-then real Google login via **authlib + a signed-cookie session** — NOT `fastapi-users` (see
-the corrected recommendation below). The full step-by-step handoff is the multi-tenancy + auth
-plan in `.claude/plans/`.
+**Status (2026-06-15): Increment 1 (multi-tenancy) is IMPLEMENTED on `feat/multi-tenancy`;
+Increment 2 (real Google login) is next.** Decisions locked: multi-tenancy refactor first
+behind a stub `get_current_user` (returns a fixed dev user), then real Google login via
+**authlib + a signed-cookie session** — NOT `fastapi-users` (see the corrected recommendation
+below). The full step-by-step handoff is the multi-tenancy + auth plan in `.claude/plans/`.
+
+### Phase 2 — Increment 1: Multi-tenancy (IMPLEMENTED 2026-06-15)
+
+Every document and retrieved chunk is now owned by a user; retrieval never returns another
+user's chunks. Auth is stubbed — `get_current_user` returns a fixed dev user — so the only
+seam Increment 2 rewires is that one dependency.
+
+- **Auth seam** (`app/auth.py`, new): `get_or_create_dev_user(db)` (find-or-create
+  `username="dev"`) + `get_current_user` dependency returning it. Increment 2 replaces only
+  `get_current_user`'s body (resolve `request.session["user_id"]`, 401 when absent).
+- **Model** (`app/database.py`): `LoreDocument.user_id = Column(Integer,
+  ForeignKey("users.id"), nullable=False, index=True)`. Dev user seeded in `main.py` lifespan.
+- **Stamp at ingest**: both upload routes set `LoreDocument.user_id = current_user.id`;
+  `_process_and_chunk`'s `base_metadata` carries `user_id` into every FAISS chunk.
+- **Enforce at retrieval (core)**: `VectorStoreManager._build_filter_function` gained a
+  `user_id` param and rejects any chunk whose `metadata["user_id"]` differs (right after the
+  soft-delete check). Threaded through `search_with_scores` ← `ask_question` /
+  `ask_with_context` ← the chat / conversational routes (`user_id=current_user.id`).
+- **Scope management**: `list_all_documents` / `delete_document` filter `LoreDocument` by
+  `user_id`; the `/documents/{id}/status` route filters its query by owner.
+- **Conversation ownership**: sessions bind to `current_user.id`; `get_history` /
+  `clear_session` / `list_sessions` only touch the caller's sessions (`_owned_session`;
+  non-owned == absent). `clear_conversation` now returns `False` for missing/foreign sessions,
+  making the route's previously-dead 404 branch live.
+- **Tests**: `tests/test_user_filter.py` (filter rejects foreign / unstamped chunks),
+  `tests/test_user_scoping.py` (ingest stamps `user_id`; list/delete user-scoped, in-memory
+  SQLite), `tests/test_conversation_ownership.py`. Suite **84 → 98**, ~0.6s, no API keys.
+- **⚠️ MANDATORY DB RESET before running the server.** `create_all` can't add the new
+  NOT-NULL `user_id` column to the existing `app.db` (old schema), and the on-disk FAISS chunks
+  predate `user_id` (so they'd be blocked by the filter anyway). Data is disposable at this
+  stage — delete and re-ingest:
+  ```bash
+  rm -f app.db && rm -rf faiss_index/
+  ```
+  Proper migration is deferred to the Postgres/Alembic move (Phase 2 item 3).
+- **Known gaps left for Increment 2** (deliberate, documented above): `process_document` /
+  `rebuild_index` / `delete_all_documents` routes are still global; `_fetch_k_for` isn't
+  user-aware (moot under the single dev user); the removed free-form `user_id` query param on
+  `/conversation/ask` is now derived from the authenticated user (FastAPI ignores a stray
+  `user_id=` query arg, so the same-origin frontend is unaffected).
 
 Roughly the order, each its own commit-able unit:
 

@@ -246,6 +246,7 @@ class EnhancedRAGService:
         max_chapter: Optional[int] = None,
         include_reference: bool = False,
         k: Optional[int] = None,
+        user_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Answer a question using RAG.
@@ -298,6 +299,7 @@ class EnhancedRAGService:
                 document_id=document_id,
                 max_chapter=max_chapter,
                 include_reference=include_reference,
+                user_id=user_id,
             )
 
             if not docs_with_scores:

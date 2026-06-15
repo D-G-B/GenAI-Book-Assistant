@@ -63,7 +63,9 @@ def make_dm():
 
 
 def fake_doc(content):
-    return types.SimpleNamespace(id=1, title="Test Book", source_type="epub", content=content)
+    return types.SimpleNamespace(
+        id=1, user_id=1, title="Test Book", source_type="epub", content=content
+    )
 
 
 def chapter_numbers(chunks):

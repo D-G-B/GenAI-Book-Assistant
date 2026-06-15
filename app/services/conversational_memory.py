@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ConversationSession:
     """Represents a single conversation session."""
 
-    def __init__(self, session_id: str, user_id: Optional[str] = None):
+    def __init__(self, session_id: str, user_id: Optional[int] = None):
         self.session_id = session_id
         self.user_id = user_id
         self.created_at = datetime.now()
@@ -57,7 +57,7 @@ class ConversationMemoryManager:
         self.max_sessions = max_sessions
 
     def get_or_create_session(
-        self, session_id: str, user_id: Optional[str] = None
+        self, session_id: str, user_id: Optional[int] = None
     ) -> ConversationSession:
         if session_id not in self.sessions:
             if len(self.sessions) >= self.max_sessions:
@@ -126,7 +126,7 @@ class ContextAwareRAG:
         self,
         question: str,
         session_id: str,
-        user_id: Optional[str] = None,
+        user_id: Optional[int] = None,
         document_id: Optional[int] = None,
         max_chapter: Optional[int] = None,
         include_reference: bool = False,
@@ -178,6 +178,7 @@ class ContextAwareRAG:
                 document_id=document_id,
                 max_chapter=max_chapter,
                 include_reference=include_reference,
+                user_id=user_id,
             )
 
             if not docs_with_scores:
@@ -306,12 +307,29 @@ class ContextAwareRAG:
             "llm_calls": llm_calls,
         }
 
-    def get_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get conversation history for a session."""
-        if session_id not in self.memory_manager.sessions:
+    def _owned_session(
+        self, session_id: str, user_id: Optional[int]
+    ) -> Optional[ConversationSession]:
+        """Return the session only if it exists and belongs to user_id.
+
+        A non-owned session is treated as absent so a caller can never confirm
+        the existence of another user's session.
+        """
+        session = self.memory_manager.sessions.get(session_id)
+        if session is None:
+            return None
+        if user_id is not None and session.user_id != user_id:
+            return None
+        return session
+
+    def get_conversation_history(
+        self, session_id: str, user_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Get conversation history for a session owned by the caller."""
+        session = self._owned_session(session_id, user_id)
+        if session is None:
             return []
 
-        session = self.memory_manager.sessions[session_id]
         return [
             {
                 'role': msg['role'],
@@ -321,15 +339,24 @@ class ContextAwareRAG:
             for msg in session.messages
         ]
 
-    def clear_conversation(self, session_id: str) -> bool:
-        """Clear a conversation session."""
-        if session_id in self.memory_manager.sessions:
-            del self.memory_manager.sessions[session_id]
+    def clear_conversation(self, session_id: str, user_id: Optional[int] = None) -> bool:
+        """Clear a conversation session owned by the caller.
+
+        Returns False when the session doesn't exist or isn't owned by user_id,
+        so the route can surface a 404 instead of silently succeeding.
+        """
+        if self._owned_session(session_id, user_id) is None:
+            return False
+        del self.memory_manager.sessions[session_id]
         return True
 
-    def list_active_sessions(self) -> List[Dict[str, Any]]:
-        """List all active conversation sessions."""
-        return [s.get_summary() for s in self.memory_manager.sessions.values()]
+    def list_active_sessions(self, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """List active conversation sessions, scoped to the caller when user_id is set."""
+        return [
+            s.get_summary()
+            for s in self.memory_manager.sessions.values()
+            if user_id is None or s.user_id == user_id
+        ]
 
 
 # Global instance

@@ -353,6 +353,7 @@ class DocumentManager:
         """
         base_metadata = {
             'document_id': db_doc.id,
+            'user_id': db_doc.user_id,
             'document_title': db_doc.title,
             'source_type': db_doc.source_type or 'text'
         }
@@ -522,13 +523,16 @@ class DocumentManager:
     # DELETION & MAINTENANCE
     # =========================================================================
 
-    def delete_document(self, db: Session, document_id: int) -> bool:
-        """Delete a document (soft delete)."""
+    def delete_document(self, db: Session, document_id: int, user_id: int) -> bool:
+        """Delete a document (soft delete). Scoped to the owning user."""
         try:
-            db_doc = db.query(LoreDocument).filter(LoreDocument.id == document_id).first()
+            db_doc = db.query(LoreDocument).filter(
+                LoreDocument.id == document_id,
+                LoreDocument.user_id == user_id,
+            ).first()
 
             if not db_doc:
-                logger.warning("Document %d not found in database", document_id)
+                logger.warning("Document %d not found for user %d", document_id, user_id)
                 return False
 
             doc_title = db_doc.title
@@ -636,9 +640,11 @@ class DocumentManager:
             'metadata': self.processed_documents.get(document_id, {})
         }
 
-    def list_all_documents(self, db: Session, include_deleted: bool = False) -> List[Dict[str, Any]]:
-        """List all documents in the system with their processing status."""
-        db_docs = db.query(LoreDocument).all()
+    def list_all_documents(
+        self, db: Session, user_id: int, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """List a user's documents with their processing status."""
+        db_docs = db.query(LoreDocument).filter(LoreDocument.user_id == user_id).all()
 
         result = []
         for doc in db_docs:
