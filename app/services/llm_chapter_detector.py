@@ -103,6 +103,17 @@ def _parse_llm_json_array(text: str) -> Optional[list]:
     return parsed if isinstance(parsed, list) else None
 
 
+def _looks_truncated(text: str) -> bool:
+    """Heuristic: a response that opened a JSON array but never closed it.
+
+    The labelling output is an array of objects, so the only ']' is the array's
+    closing bracket; if the model was cut off at its output-token cap the text
+    has a '[' and no ']'. Lets the caller distinguish a truncated response
+    (actionable: raise the cap) from other parse failures (empty / no JSON).
+    """
+    return "[" in text and "]" not in text
+
+
 def _build_prompt(candidates: List[Tuple[int, str]]) -> str:
     """Build the extraction prompt from numbered candidate heading lines."""
     numbered = "\n".join(f"{i}: {text}" for i, (_, text) in enumerate(candidates, start=1))
@@ -286,6 +297,14 @@ def detect_chapters_hybrid(
 
         parsed = _parse_llm_json_array(text)
         if not parsed:
+            if _looks_truncated(text):
+                logger.warning(
+                    "Chapter labelling output looks truncated (%d chars, no "
+                    "closing ']'); the LLM likely hit its output-token cap. Raise "
+                    "LLM_CHAPTER_DETECTION_MAX_TOKENS and re-ingest. Falling back "
+                    "to regex chapter detection.",
+                    len(text),
+                )
             return []
 
         return _reconcile(parsed, anchors, content)

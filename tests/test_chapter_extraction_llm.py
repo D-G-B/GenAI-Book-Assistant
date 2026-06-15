@@ -5,6 +5,7 @@ returning canned JSON), so these run in the fast suite with no API keys.
 """
 
 import json
+import logging
 
 from app.services.llm_chapter_detector import (
     detect_chapters_llm,
@@ -170,6 +171,18 @@ def test_hybrid_failure_returns_empty():
         raise RuntimeError("provider down")
 
     assert detect_chapters_hybrid(MARKED_BOOK, invoke=boom) == []
+
+
+def test_hybrid_warns_on_truncated_output(caplog):
+    # An array that opened but never closed (model hit its output-token cap):
+    # has '[' and no ']'. Should return [] AND log an actionable warning so the
+    # silent regex fallback isn't invisible.
+    truncated = '[\n  {"id": 1, "title": "=== Section 2 ===", "chapter_number": 1'
+    with caplog.at_level(logging.WARNING):
+        out = detect_chapters_hybrid(MARKED_BOOK, invoke=fake_invoke(truncated))
+    assert out == []
+    assert "looks truncated" in caplog.text
+    assert "LLM_CHAPTER_DETECTION_MAX_TOKENS" in caplog.text
 
 
 # ---------- chapter_metrics ----------
