@@ -56,6 +56,22 @@ _lcgg_chat._create_retry_decorator = _patched_google_retry_decorator
 from langchain_google_genai import ChatGoogleGenerativeAI  # noqa: E402  pylint: disable=wrong-import-position
 
 
+def _output_cap_kwargs(provider: str, max_tokens: int) -> Dict[str, Any]:
+    """Bind-kwargs that cap output tokens for a given provider, for one call.
+
+    Each LangChain wrapper exposes the cap differently at call time:
+    OpenAI/Anthropic honour a `max_tokens` runtime kwarg; Google routes bare
+    runtime kwargs straight to the raw client (which rejects `max_tokens`) and
+    only applies an output cap inside `generation_config`, which it merges over
+    the model's own params. We bind (wrap) the model rather than copy it —
+    copying these pydantic-v1-shim models drops default-valued fields like
+    `callbacks` and breaks invoke().
+    """
+    if provider == "google":
+        return {"generation_config": {"max_output_tokens": max_tokens}}
+    return {"max_tokens": max_tokens}
+
+
 class EnhancedRAGService:
     """
     Enhanced RAG service focused on query processing and answer generation.
@@ -115,19 +131,17 @@ class EnhancedRAGService:
             )
 
         if settings.OPENAI_API_KEY and settings.DEFAULT_OPENAI_MODEL:
-            providers.append(
-                (
-                    "openai",
-                    ChatOpenAI(
-                        model_name=settings.DEFAULT_OPENAI_MODEL,
-                        openai_api_key=settings.OPENAI_API_KEY,
-                        temperature=0.3,
-                        max_tokens=settings.MAX_TOKENS,
-                        request_timeout=timeout,
-                        max_retries=max_retries,
-                    ),
-                )
+            openai_kwargs = dict(
+                model_name=settings.DEFAULT_OPENAI_MODEL,
+                openai_api_key=settings.OPENAI_API_KEY,
+                temperature=0.3,
+                max_tokens=settings.MAX_TOKENS,
+                request_timeout=timeout,
+                max_retries=max_retries,
             )
+            if settings.OPENAI_BASE_URL:
+                openai_kwargs["base_url"] = settings.OPENAI_BASE_URL
+            providers.append(("openai", ChatOpenAI(**openai_kwargs)))
         if settings.ANTHROPIC_API_KEY and settings.DEFAULT_CLAUDE_MODEL:
             providers.append(
                 (
@@ -152,12 +166,18 @@ class EnhancedRAGService:
             logger.warning("No LLM configured - check your API keys")
         return providers
 
-    def invoke_with_fallback(self, prompt_text: str) -> Dict[str, Any]:
+    def invoke_with_fallback(
+        self, prompt_text: str, max_tokens: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Invoke configured providers in order; on any exception, log and try the next.
 
         Returns: {"text": str, "provider": str, "calls": int} where `calls` counts
         the providers tried during *this* invocation (1 if the first worked,
         2 if first failed and second worked, etc.).
+
+        `max_tokens`, when given, overrides the output cap for this call only (the
+        providers are built once with settings.MAX_TOKENS). Used by the chapter
+        detector, whose JSON labelling output needs more room than a chat answer.
         """
         last_exc: Optional[Exception] = None
         calls_this_invocation = 0
@@ -172,7 +192,10 @@ class EnhancedRAGService:
                 dict(self.call_count_by_provider),
             )
             try:
-                response = llm.invoke(prompt_text)
+                call_llm = llm
+                if max_tokens is not None:
+                    call_llm = llm.bind(**_output_cap_kwargs(name, max_tokens))
+                response = call_llm.invoke(prompt_text)
                 text = getattr(response, "content", None) or str(response)
                 return {"text": text, "provider": name, "calls": calls_this_invocation}
             except Exception as exc:

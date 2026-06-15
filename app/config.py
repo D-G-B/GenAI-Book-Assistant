@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 class Settings:
     # API Keys
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -22,6 +23,12 @@ class Settings:
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1000"))
+
+    # Input Limits
+    # Reject oversized uploads before loading them fully into memory (OOM guard),
+    # and cap question length to avoid unbounded token use on a single query.
+    MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+    MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "2000"))
 
     # Retrieval Settings
     RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "8"))
@@ -36,9 +43,27 @@ class Settings:
     RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
     RERANK_POOL_SIZE = int(os.getenv("RERANK_POOL_SIZE", "30"))
 
+    # Chapter Detection Settings
+    # The hybrid detector (regex anchors + one LLM labelling call) runs once at
+    # ingest to number chapters in story order and flag front/back matter — things
+    # the pure-regex detector can't do. Set LLM_CHAPTER_DETECTION_ENABLED=False to
+    # skip it and use the regex detector only. The labelling call emits one JSON
+    # object per section, which needs more output room than a chat answer, so it
+    # gets its own token cap instead of the chat-sized MAX_TOKENS.
+    LLM_CHAPTER_DETECTION_ENABLED = os.getenv("LLM_CHAPTER_DETECTION_ENABLED", "True").lower() == "true"
+    # Default 16000: the first-fallback model gemini-2.5-flash is a "thinking"
+    # model whose reasoning consumes the output-token budget, so the labelling
+    # JSON for a full book truncates below ~16k (verified 1.00 on Dune at 16000).
+    LLM_CHAPTER_DETECTION_MAX_TOKENS = int(os.getenv("LLM_CHAPTER_DETECTION_MAX_TOKENS", "16000"))
+
     def validate_api_keys(self):
         """
-        Check if the api keys are present
+        Warn about missing keys and key/model mismatches at startup.
+
+        Returns True only if all three provider keys are present. Also warns when a
+        key is set without its matching DEFAULT_*_MODEL: `_initialize_llms` silently
+        skips such a provider, so without this the gap only shows up as missing
+        capacity (or a query-time failure if it leaves no provider configured).
         """
         missing_keys =  []
         if not self.OPENAI_API_KEY:
@@ -50,6 +75,21 @@ class Settings:
 
         if missing_keys:
             logger.warning("Missing API keys: %s. Add them to your .env to use those models.", ", ".join(missing_keys))
+
+        incomplete = [
+            f"{key_name} is set but {model_name} is missing"
+            for key, model, key_name, model_name in (
+                (self.OPENAI_API_KEY, self.DEFAULT_OPENAI_MODEL, "OPENAI_API_KEY", "DEFAULT_OPENAI_MODEL"),
+                (self.ANTHROPIC_API_KEY, self.DEFAULT_CLAUDE_MODEL, "ANTHROPIC_API_KEY", "DEFAULT_CLAUDE_MODEL"),
+                (self.GOOGLE_API_KEY, self.DEFAULT_GEMINI_MODEL, "GOOGLE_API_KEY", "DEFAULT_GEMINI_MODEL"),
+            )
+            if key and not model
+        ]
+        if incomplete:
+            logger.warning(
+                "Incomplete provider config (these providers will be unavailable): %s",
+                "; ".join(incomplete),
+            )
 
         return len(missing_keys) == 0
 

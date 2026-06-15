@@ -3,15 +3,17 @@ Pydantic schemas for Chat and Conversational APIs.
 Includes simplified spoiler model with reference material toggle.
 """
 
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
+
+from app.config import settings
 
 # --- Basic Request/Response Models ---
 
 class ChatRequest(BaseModel):
-    question: str
-    max_chunks: Optional[int] = 3
+    # Cap question length to bound per-query token use (whitespace-only is still
+    # rejected in the route). max_length yields a 422 with a clear message.
+    question: str = Field(..., max_length=settings.MAX_QUESTION_LENGTH)
 
 class ChatSource(BaseModel):
     """Represents a single chunk of text used to answer a question."""
@@ -52,20 +54,6 @@ class ConversationResponse(ChatResponse):
     conversation_length: int
     context_used: bool
     filtered_to_document: Optional[int] = None
-
-# --- Database/History Models ---
-
-class ChatHistory(BaseModel):
-    """Schema for reading chat history from the database."""
-    id: int
-    question: str
-    answer: str
-    sources: List[Dict[str, Any]]
-    model_used: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 class ServiceStatus(BaseModel):
     """Schema for the system status endpoint."""

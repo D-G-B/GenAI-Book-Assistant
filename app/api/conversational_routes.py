@@ -19,8 +19,8 @@ async def ask_conversational(
         request: ChatRequest,
         session_id: Optional[str] = Query(None, description="Conversation session ID"),
         user_id: Optional[str] = Query(None, description="User identifier"),
-        document_id: Optional[int] = Query(None, description="Filter search to specific document"),
-        max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter"),
+        document_id: Optional[int] = Query(None, ge=1, description="Filter search to specific document"),
+        max_chapter: Optional[int] = Query(None, ge=1, description="Spoiler protection: only search up to this chapter"),
         include_reference: bool = Query(False, description="Include reference material when spoiler filter is active"),
         db: Session = Depends(get_db)
 ):

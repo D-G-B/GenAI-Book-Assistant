@@ -18,15 +18,3 @@ class DocumentResponse(DocumentBase):
 
     class Config:
         from_attributes = True
-
-class DocumentChunkBase(BaseModel):
-    chunk_text: str
-    chunk_index: int
-    chunk_metadata: Optional[Dict[str, Any]] = None
-
-class DocumentChunk(DocumentChunkBase):
-    id: int
-    document_id: int
-
-    class Config:
-        from_attributes = True

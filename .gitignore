@@ -67,5 +67,9 @@ faiss_index/
 # Local source books (large binaries, not for git)
 Books/
 
+# Real-book eval fixture: embeds the full extracted book text (copyrighted, not for git).
+# Regenerate locally from Books/ via tests/eval/build_dune_fixture.py.
+tests/eval/fixtures/dune_chapters.json
+
 # Windows NTFS alternate-stream artifacts (created when files are copied via Explorer)
 *:Zone.Identifier

@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-06-12T15:17:25.389862",
+  "detector": "regex",
+  "mode": "live",
+  "summary": {
+    "boundary_precision": 0.7641509433962265,
+    "boundary_recall": 0.6666666666666667,
+    "boundary_f1": 0.6803108808290156,
+    "chapter_number_accuracy": 0.6229885057471265,
+    "is_reference_accuracy": 0.710344827586207
+  },
+  "results": [
+    {
+      "name": "arabic_numbered",
+      "score": {
+        "boundary_precision": 1.0,
+        "boundary_recall": 1.0,
+        "boundary_f1": 1.0,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 2,
+        "predicted": 2,
+        "expected": 2
+      }
+    },
+    {
+      "name": "numbered_with_glossary",
+      "score": {
+        "boundary_precision": 1.0,
+        "boundary_recall": 1.0,
+        "boundary_f1": 1.0,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 3,
+        "predicted": 3,
+        "expected": 3
+      }
+    },
+    {
+      "name": "titled_only",
+      "score": {
+        "boundary_precision": 0.0,
+        "boundary_recall": 0.0,
+        "boundary_f1": 0.0,
+        "chapter_number_accuracy": 0.0,
+        "is_reference_accuracy": 0.0,
+        "matched": 0,
+        "predicted": 0,
+        "expected": 3
+      }
+    },
+    {
+      "name": "titled_with_afterword",
+      "score": {
+        "boundary_precision": 1.0,
+        "boundary_recall": 0.3333333333333333,
+        "boundary_f1": 0.5,
+        "chapter_number_accuracy": 1.0,
+        "is_reference_accuracy": 1.0,
+        "matched": 1,
+        "predicted": 1,
+        "expected": 3
+      }
+    },
+    {
+      "name": "dune-real-book (Dune (40th Anniversary Edition) -- Herbe...)",
+      "score": {
+        "boundary_precision": 0.8207547169811321,
+        "boundary_recall": 1.0,
+        "boundary_f1": 0.9015544041450777,
+        "chapter_number_accuracy": 0.11494252873563218,
+        "is_reference_accuracy": 0.5517241379310345,
+        "matched": 87,
+        "predicted": 106,
+        "expected": 87
+      }
+    }
+  ]
+}

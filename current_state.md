@@ -4,16 +4,28 @@ A snapshot of where the project sits at the end of the Phase 1 hardening pass.
 
 ## Branch
 
-`cleanup-and-improvement` — 8 commits ahead of `main`. Merge candidate; everything verified locally.
+`claude/upbeat-lovelace-a4qv7` — 17 commits ahead of `main`. (The Phase 1 work formerly
+tracked here on `cleanup-and-improvement` is already in `main`.)
+Latest session (2026-06-15) — hybrid chapter detector wired into ingest + sanity-sweep fixes:
 
 ```
-ef2cc94 Phase 1A:   gate uvicorn reload on DEBUG, sync uv.lock, ignore .claude/
-9ee7808 Phase 1B.1: project-wide logging, replace print() with loggers, tighten excepts
-55dc8f7 Phase 1B.2: pytest infra + unit tests for spoiler filter, chapter extraction, score normalization
-1c3cd54 Phase 1B.3: tiny retrieval eval + Dune baseline (recall@5 = 0.80)
-210a9e7 Phase 1C.1: replace ConversationalRetrievalChain with direct flow, populate similarity scores
-6608e3a Phase 1C.2: cross-encoder reranker (BAAI/bge-reranker-base), recall@5 0.80 -> 0.90
-b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chunk fallback)
+81742d4 fix: model-name validation, dead-code cleanup, startup failure logging
+0551538 doc: mark should_rebuild / upload-limit / chat-bounds fixes in current_state.md
+c51a1e6 fix: should_rebuild ratio + upload size limit + chat input bounds
+699d9cf doc: mark hybrid chapter detector wired into ingest; record provider findings
+2bba9e6 feat: warn (not silently fall back) when chapter labelling is truncated
+7b78003 feat: use hybrid LLM chapter detector at ingest, regex as fallback
+```
+(plus the doc commit recording these sanity-sweep fixes)
+
+Prior session (2026-06-12):
+
+```
+ffdf97b feat: hybrid chapter detector - regex anchors + one small LLM labelling call
+d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
+6d6bb3e feat: support OPENAI_BASE_URL for GitHub Models PAT
+48f4d6b eval: abort chapter eval loudly when no LLM provider works
+32fc244 experiment: standalone LLM chapter detector + head-to-head eval vs regex
 ```
 
 ## What was hardened
@@ -59,6 +71,168 @@ b18e744 Phase 1C.3: batch add_documents (one embed call per upload, with per-chu
 | Recall@5 with reranker | 0.90 (9/10) |
 | `grep -r "print(" app/` | empty |
 
+## Known issues (bugs to fix)
+
+- ✅ **RESOLVED (2026-06-15) — Titled-only chapters silently broke spoiler protection.**
+  (Implementation + new findings under "Status" below.) `_detect_chapters_in_content`
+  (`document_manager.py:231`) relies on regex patterns that require the word "Chapter" (or
+  equivalent) in the heading. Books that use title-only chapter headings (e.g. "The Gathering
+  Storm", "A Meeting at Dusk") return `< 2` matches, causing `_process_and_chunk` to fall
+  through to `_chunk_flat` (line 418), which stamps `chapter_number=1` on every chunk. The
+  spoiler filter then treats the whole book as chapter 1 — silently allowing any chapter's
+  content to appear regardless of the user's `max_chapter` setting.
+  **Planned fix:** evaluate a PageIndex-style LLM-based heading extractor as a smarter
+  alternative (see plan in `.claude/plans/`); if that doesn't resolve it, patch the regex to
+  accept standalone title-cased lines as chapter boundaries.
+  **Status (2026-06-12): measured live, hybrid detector wins outright.** Three detectors
+  scored against synthetic fixtures plus a hand-labelled real book (Dune 40th-Anniversary
+  epub: 48 narrative chapters + 39 reference units; fixture gitignored — regenerate via
+  `tests/eval/build_dune_fixture.py`). Real-book row:
+
+  | Dune row | regex | LLM-solo | hybrid |
+  |---|---|---|---|
+  | boundary_f1 | 0.90 | 0.18 | **1.00** |
+  | chapter_number_accuracy | 0.11 | 1.00 (on matches) | **1.00** |
+  | is_reference_accuracy | 0.55 | 1.00 (on matches) | **1.00** |
+
+  Regex finds boundaries only via the epub extractor's `=== Section N ===` artifacts and
+  mis-numbers everything (+4 shift, zero reference flags); LLM-solo labels perfectly but
+  can't tell which bare heading lines are chapters (it picks the ToC). The **hybrid**
+  (`detect_chapters_hybrid`: regex-found marker anchors + ONE small LLM call that labels
+  each anchor seeing a ~120-char snippet of following text) scored 1.00 on every metric,
+  live, via GitHub Models gpt-4o-mini — ~5k tokens per book (~$0.002/book), 10x smaller
+  than an LLM-solo prompt and the only variant that fits the PAT's 8k request cap.
+
+  **Status (2026-06-15): WIRED INTO INGEST** (commits 7b78003 + 2bba9e6). In
+  `DocumentManager._process_and_chunk`, `detect_chapters_hybrid(content)` runs first (off
+  the event loop via `run_in_executor`) and chunks with its labels when it returns >= 2
+  chapters; otherwise it falls through to the regex detector (behavior preserved — hybrid
+  returns `[]` on LLM failure). Real Dune ingest now yields story-order chapters **1..48**
+  (was 2..91) with reference material flagged. Suite 59 → 65, no API keys.
+
+  Prereqs handled: added `LLM_CHAPTER_DETECTION_ENABLED` (default True) opt-out flag and
+  `LLM_CHAPTER_DETECTION_MAX_TOKENS` (default **16000**, see below) in `config.py`;
+  `invoke_with_fallback` gained a per-call `max_tokens` override applied via `.bind()`
+  (NOT `.copy()`, which drops default-valued fields like `callbacks` on these
+  pydantic-v1-shim models) using helper `_output_cap_kwargs` — `max_tokens` for
+  OpenAI/Anthropic, `generation_config={"max_output_tokens": N}` for Google.
+
+  Design kept as decided 2026-06-12: **no "zero-cost tier"** (skipping the LLM when regex
+  finds `Chapter N` was rejected — sequel-preview "Chapter 1" sections and part-relative
+  numbering leak through `max_chapter` filtering; only the LLM pass classifies front/back
+  matter correctly).
+
+  **New live findings (2026-06-15) that changed the eval-time picture:**
+  - **gemini-2.5-flash (first in fallback) is a thinking model** — its reasoning consumes
+    the output-token budget, so the labelling JSON truncates below ~16k. Hence the 16000
+    default (scored 1.00 on Dune at 16000; truncates → regex fallback below it). Dune used
+    ~15.5k, so headroom is thin for much larger books — a WARNING now fires on truncation
+    naming the env var to raise.
+  - **The GitHub Models PAT (gpt-4o-mini) drifted**: scored 1.00 on 2026-06-12 but 0.17 on
+    2026-06-15 (confirmed stable across 3 runs — over-omits sections). Don't trust a past
+    PAT score to hold; re-measure. Fine for short Q&A.
+  - `gemini-1.5-flash` (404) and `gemini-2.0-flash` (empty) are unavailable on the current
+    free key, so cheap non-thinking Gemini isn't an option here yet.
+
+  Remaining follow-ups:
+  - ✅ **DONE (2026-06-15, later) — *parseable-but-wrong* fallback gap closed.**
+    `detect_chapters_hybrid` now sanity-checks a complete result before returning it
+    (`_hybrid_result_is_plausible`): narrative `chapter_number`s must be story-order
+    `1..N` exactly (rejects duplicates, out-of-order labels, and the documented failure
+    of the LLM copying a number out of the `=== Section N ===` anchor line), and on the
+    marker path dropping more than half the `=== ... ===` markers is rejected as gross
+    over-omission. On failure it logs a WARNING and returns `[]`, so the existing regex
+    fallback fires unchanged (`_process_and_chunk`'s `len(chapters) < 2` gate is
+    untouched). **Residual gap:** a perfectly *renumbered* tiny subset on the
+    `heading_candidates` path (PDF/plain text) still passes, since coverage is only
+    checked on the marker path where anchors are reliable. Tests in
+    `test_chapter_extraction_llm.py` + `test_ingest_chapter_detection.py`.
+  - Recover the PAT as a reliable second free endpoint via a sharper detection prompt
+    ("omit ONLY title page + ToC; never drop a narrative chapter").
+  - Production cost (the only waste is ~13k thinking tokens/book): upgrade
+    `langchain-google-genai` (pinned 1.0.4, predates Gemini 2.5) to control
+    `thinking_budget`, or point detection at a verified cheap non-thinking model.
+  - Optional regex hardening (independent): add Foreword/Preface/Prologue/Introduction to
+    `reference_patterns`, and note the pattern-priority quirk (a titled `=== ... ===` match
+    within 20 chars beats reference classification — why Dune's appendices weren't flagged).
+
+The following were found in a codebase sanity sweep (2026-06). Most were fixed on 2026-06-15
+(commits c51a1e6 + a follow-up pass, marked ✅ below); the nullable-columns item is already
+guarded in code and its schema constraint is deferred (see its note):
+
+- ✅ **FIXED (2026-06-15) — CRITICAL `should_rebuild()` ratio formula was wrong**
+  (`vector_store_manager.py`). The old `deleted_count / (deleted_count + 10)` ignored index
+  size and mis-fired; soft-deleted chunks accumulated in FAISS indefinitely. Now compares
+  deleted *chunks* / total chunks — counted from the docstore, since `deleted_document_ids`
+  tracks documents (one document maps to many chunks), so the doc's earlier one-line
+  suggestion `deleted_count / total_chunks` would have mixed units. Tests in
+  `tests/test_should_rebuild.py`.
+- ✅ **FIXED (2026-06-15) — `validate_api_keys()` didn't validate model names** (`config.py`).
+  Now warns at startup when a provider key is set without its matching `DEFAULT_*_MODEL`
+  (such a provider is silently skipped in `_initialize_llms`). Tests in
+  `tests/test_config_validation.py`.
+- ✅ **FIXED (2026-06-15) — No file size limit on upload** (`documents_routes.py`). Reads at
+  most `MAX_UPLOAD_SIZE_MB`+1 bytes and returns 413 if exceeded, so an oversized file is
+  rejected without being fully loaded into memory.
+- ✅ **FIXED (2026-06-15) — Unsupported file types "junk content"** (`documents_routes.py`).
+  The unsupported-extension 400 (the `supported` set check) already runs before the read, so
+  the `[Unsupported file type: ...]` branch was unreachable dead code — removed it.
+- ✅ **FIXED then SUPERSEDED (2026-06-15) — `JSONLoader(text_content=False)`**
+  (`advanced_document_loaders.py`) → `text_content=True`, then **the whole module was
+  removed.** `DocumentProcessor` / `MultiFormatDocumentLoader` / `EpubLoader` /
+  `WebDocumentLoader` were a second, diverging copy of the file-format extractors and
+  entirely unused by the active ingest path — the upload route does its own inline
+  PDF/Word/EPUB extraction in `documents_routes.py` (`_extract_pdf_content`,
+  `_extract_word_content`, `_extract_epub_content`); `.json`/`.csv`/text are decoded as raw
+  text. The only link was a dangling import + an assigned-but-never-read
+  `self.document_processor` in `document_manager.py`, both removed. `advanced_document_loaders.py`
+  is deleted, so the latent JSONLoader fix went with it (it was never on the active path).
+- ✅ **FIXED (2026-06-15) — No input bounds on chat** (`chat_routes.py`, `schemas/chat.py`).
+  Question length capped at `MAX_QUESTION_LENGTH` (422 on overflow); `max_chapter` and
+  `document_id` query params require `ge=1`. Test in `tests/test_input_bounds.py`.
+- ⏸️ **Nullable DB columns** (`database.py`). Re-examined 2026-06-15: the ingest path does
+  NOT deref unchecked — `add_document` guards `content` and `_process_and_chunk` defaults
+  `source_type` to `'text'`. Adding `nullable=False` now is a no-op on the existing SQLite DB
+  (`create_all` won't alter it) and would desync from `DocumentCreate(content: Optional)`.
+  Deferred to the Phase 2 Postgres/Alembic migration, where the constraint can be applied and
+  the API schema aligned. (`doc_metadata` is defined-but-unused — harmless future field.)
+- ✅ **FIXED (2026-06-15) — Startup reprocessing swallowed failure reasons** (`main.py`). The
+  boot loop now checks `add_document`'s return value and logs a per-document warning on failure.
+- ✅ **FIXED (2026-06-15) — Unused `BaseLoader` import** (`advanced_document_loaders.py`) —
+  removed.
+
+### Second sanity sweep (2026-06-15, pre-auth)
+
+A read-through before starting auth/multi-tenancy surfaced one live bug, one bounds gap,
+and a layer of dead code left after `DocumentProcessor` was removed. Fixed the live items
+and removed the clearly-dead Python; the dead DB *tables* are deferred (see below).
+
+- ✅ **FIXED — `created_at` default evaluated once at import** (`database.py`).
+  `Column(DateTime(timezone=True), default=datetime.now(timezone.utc))` passed a value
+  computed at import time, so every row shared one timestamp (≈ server start) — user-visible
+  via `DocumentResponse.created_at`. Now `default=lambda: datetime.now(timezone.utc)` on
+  `User` / `LoreDocument` / `LoreQuery`. Regression guard: `tests/test_database_defaults.py`
+  (asserts the column default `is_callable`).
+- ✅ **FIXED — Conversational route missing `ge=1` bounds** (`conversational_routes.py`).
+  The earlier chat-input-bounds fix covered `chat_routes.py` but not the conversational
+  endpoint; `max_chapter` / `document_id` now require `ge=1` there too. Verified live (the
+  route-level bound isn't unit-tested — a `TestClient` test can't run in this env: the
+  installed httpx/starlette versions are incompatible, `Client.__init__() got an unexpected
+  keyword argument`).
+- ✅ **REMOVED — dead Python** (no callers, confirmed by grep): `ChatHistory` schema
+  (`schemas/chat.py`, also the source of the pydantic `model_used` protected-namespace
+  warning), `max_chunks` field on `ChatRequest`, `DocumentChunk` / `DocumentChunkBase`
+  schemas (`schemas/documents.py`), `VectorStoreManager.get_retriever()` (superseded by
+  `search_with_scores`) and `.undelete_document()` (restore is done inline via
+  `deleted_document_ids.discard()` in `document_manager.add_document`).
+- ⏸️ **Deferred to the Postgres/Alembic migration:** the dead DB *tables* `DocumentChunk`
+  (+ `LoreDocument.chunks` relationship) and `LoreQuery`, and the unused `doc_metadata`
+  column. The migration rewrites the schema anyway, so that's where to decide whether they
+  become real (persist chunks / log queries) or get dropped. Chunks currently live only in
+  FAISS; no query logging exists.
+
+Suite: 81 → **84**, ~1.7s, no API keys.
+
 ## Known quirks (deliberately left)
 
 These are documented behaviors, not bugs:
@@ -85,7 +259,8 @@ Honest list of things absent today, ordered by how much they matter for going pu
 
 ### Robustness
 - No rate limiting.
-- No request size limits beyond FastAPI defaults.
+- Upload size (`MAX_UPLOAD_SIZE_MB`) and question length (`MAX_QUESTION_LENGTH`) are now
+  bounded; no other request size limits beyond FastAPI defaults.
 - No `.env.example` checked in.
 - No structured request IDs / correlation IDs in logs.
 
@@ -141,6 +316,32 @@ Rough effort: ~half to a full day, mostly new files (auth routes + `get_current_
 `SessionMiddleware` registration, login/logout UI in `templates/index.html` + `static/js/app.js`,
 Google OAuth2 app credentials in a new `.env.example`).
 
+## Provider / eval environment state (updated 2026-06-15)
+
+What the next session needs to know before running anything live:
+
+- **Google (Gemini, first in fallback order)**: key works, but free tier is **5 requests/min
+  AND 20 requests/day per model**; resets daily. 429s name the exact quota violated.
+  `DEFAULT_GEMINI_MODEL=gemini-2.5-flash` is a **thinking model** — its reasoning eats the
+  output-token budget, so the chapter-labelling call needs `LLM_CHAPTER_DETECTION_MAX_TOKENS`
+  ≈16000 (it scored 1.00 on Dune at 16000; truncates below). `gemini-1.5-flash` (404) and
+  `gemini-2.0-flash` (empty response) are NOT available on this key — no cheap non-thinking
+  Gemini option here yet.
+- **OpenAI (GitHub Models PAT, `OPENAI_BASE_URL=https://models.inference.ai.azure.com`,
+  gpt-4o-mini)**: reachable, but **quality drifted** — the hybrid detector scored 1.00 via
+  the PAT on 2026-06-12 and only **0.17 on 2026-06-15** (stable across 3 runs; it over-omits
+  sections). Don't assume a past PAT score still holds; re-measure. Still fine for short Q&A.
+  The fine-grained PAT needed the **Models: Read-only** account permission (added 2026-06-12).
+  Hard **8k-token request cap** (413 above it): fits the hybrid detector prompt (~5k tokens)
+  but rejects the LLM-solo prompt (~70k on a real book).
+- **Anthropic**: dead — `400: credit balance too low`. Needs credits to revive.
+- `tests/eval/results/chapter_llm.json` holds the only valid Gemini-measured LLM-solo
+  real-book baseline (Dune boundary_f1 0.18). A rerun while Gemini is quota-dead writes
+  zeros for that row (LLM-solo can't fit through the PAT) — **don't let a provider-failure
+  artifact overwrite it** (restore with `git checkout d659dd7 -- tests/eval/results/chapter_llm.json`).
+- The Dune fixture (`tests/eval/fixtures/dune_chapters.json`) is gitignored (embeds the
+  book text); regenerate from `Books/` with `uv run python -m tests.eval.build_dune_fixture`.
+
 ## Run commands you'll want again
 
 ```bash
@@ -149,6 +350,15 @@ uv run pytest tests/
 
 # Retrieval eval
 uv run python -m tests.eval.run_eval --rebuild
+
+# Chapter-detection eval, live (env var overrides .env; --sleep paces free-tier limits)
+MAX_TOKENS=8000 uv run python -m tests.eval.run_chapter_eval --sleep 15
+
+# Chapter-detection eval, deterministic harness check (no API keys; keep live artifacts safe)
+uv run python -m tests.eval.run_chapter_eval --mock-fixture --results-dir /tmp/chapter_eval_mock
+
+# Rebuild the gitignored real-book fixture from Books/
+uv run python -m tests.eval.build_dune_fixture
 
 # Smoke test imports
 uv run python -c "from main import app; print('OK')"

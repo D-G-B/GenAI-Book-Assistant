@@ -45,7 +45,11 @@ async def lifespan(app: FastAPI):
                     logger.info("   ✓ %s (already processed)", doc.title)
                 else:
                     logger.info("   Processing: %s", doc.title)
-                    await enhanced_rag_service.document_manager.add_document(db, doc.id)
+                    if not await enhanced_rag_service.document_manager.add_document(db, doc.id):
+                        logger.warning(
+                            "   ⚠️ Failed to process '%s' (id=%d) at startup; see earlier logs for the reason",
+                            doc.title, doc.id,
+                        )
 
             logger.info("✅ Document processing complete")
         else:

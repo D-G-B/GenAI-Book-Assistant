@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.schemas.documents import DocumentCreate, DocumentResponse
 
@@ -79,7 +80,15 @@ async def upload_file(
         )
 
     try:
-        file_content = await file.read()
+        # Read at most the limit + 1 byte so an oversized file is rejected without
+        # ever loading the whole thing into memory (OOM guard).
+        max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        file_content = await file.read(max_bytes + 1)
+        if len(file_content) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum upload size is {settings.MAX_UPLOAD_SIZE_MB} MB.",
+            )
         content = None
 
         # === TEXT FILES ===
@@ -105,11 +114,8 @@ async def upload_file(
         elif file_extension in ['csv', 'json']:
             content = file_content.decode('utf-8')
 
-        else:
-            try:
-                content = file_content.decode('utf-8')
-            except UnicodeDecodeError:
-                content = f"[Unsupported file type: {file.filename}]"
+        # No else: the `supported` check above already 400s any other extension,
+        # so every branch sets `content` here.
 
         # Create document record
         new_doc = LoreDocument(
