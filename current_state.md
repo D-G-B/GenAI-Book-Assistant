@@ -4,17 +4,19 @@ A snapshot of where the project sits at the end of the Phase 1 hardening pass.
 
 ## Branch
 
-`claude/upbeat-lovelace-a4qv7` — 14 commits ahead of `main`, all pushed to origin. (The
-Phase 1 work formerly tracked here on `cleanup-and-improvement` is already in `main`.)
+`claude/upbeat-lovelace-a4qv7` — 17 commits ahead of `main`. (The Phase 1 work formerly
+tracked here on `cleanup-and-improvement` is already in `main`.)
 Latest session (2026-06-15) — hybrid chapter detector wired into ingest + sanity-sweep fixes:
 
 ```
+81742d4 fix: model-name validation, dead-code cleanup, startup failure logging
+0551538 doc: mark should_rebuild / upload-limit / chat-bounds fixes in current_state.md
 c51a1e6 fix: should_rebuild ratio + upload size limit + chat input bounds
 699d9cf doc: mark hybrid chapter detector wired into ingest; record provider findings
 2bba9e6 feat: warn (not silently fall back) when chapter labelling is truncated
 7b78003 feat: use hybrid LLM chapter detector at ingest, regex as fallback
-3798d8e doc: session handoff - hybrid results, integration decision, provider state
 ```
+(plus the doc commit recording these sanity-sweep fixes)
 
 Prior session (2026-06-12):
 
@@ -146,8 +148,9 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
     `reference_patterns`, and note the pattern-priority quirk (a titled `=== ... ===` match
     within 20 chars beats reference classification — why Dune's appendices weren't flagged).
 
-The following were found in a codebase sanity sweep (2026-06). Three were fixed on 2026-06-15
-(commit c51a1e6, marked ✅ below); the rest remain open:
+The following were found in a codebase sanity sweep (2026-06). Most were fixed on 2026-06-15
+(commits c51a1e6 + a follow-up pass, marked ✅ below); the nullable-columns item is already
+guarded in code and its schema constraint is deferred (see its note):
 
 - ✅ **FIXED (2026-06-15) — CRITICAL `should_rebuild()` ratio formula was wrong**
   (`vector_store_manager.py`). The old `deleted_count / (deleted_count + 10)` ignored index
@@ -156,25 +159,34 @@ The following were found in a codebase sanity sweep (2026-06). Three were fixed 
   tracks documents (one document maps to many chunks), so the doc's earlier one-line
   suggestion `deleted_count / total_chunks` would have mixed units. Tests in
   `tests/test_should_rebuild.py`.
-- **`validate_api_keys()` doesn't validate model names** (`config.py:40`). A key without its
-  matching `DEFAULT_*_MODEL` boots cleanly, then every chat request fails at query time.
+- ✅ **FIXED (2026-06-15) — `validate_api_keys()` didn't validate model names** (`config.py`).
+  Now warns at startup when a provider key is set without its matching `DEFAULT_*_MODEL`
+  (such a provider is silently skipped in `_initialize_llms`). Tests in
+  `tests/test_config_validation.py`.
 - ✅ **FIXED (2026-06-15) — No file size limit on upload** (`documents_routes.py`). Reads at
   most `MAX_UPLOAD_SIZE_MB`+1 bytes and returns 413 if exceeded, so an oversized file is
   rejected without being fully loaded into memory.
-- **Unsupported file types stored as junk content** (`documents_routes.py:112`).
-  `"[Unsupported file type: foo.exe]"` is saved as real document content and later fails
-  downstream during chunking. Should 400 at upload instead.
-- **`JSONLoader(text_content=False)`** (`advanced_document_loaders.py:392`) returns metadata
-  rather than text, likely silently breaking `.json` ingestion. Should be `text_content=True`.
+- ✅ **FIXED (2026-06-15) — Unsupported file types "junk content"** (`documents_routes.py`).
+  The unsupported-extension 400 (the `supported` set check) already runs before the read, so
+  the `[Unsupported file type: ...]` branch was unreachable dead code — removed it.
+- ✅ **FIXED (2026-06-15) — `JSONLoader(text_content=False)`** (`advanced_document_loaders.py`)
+  → `text_content=True`. Note: this loader (`DocumentProcessor`) is currently unused by the
+  active ingest path (`.json` uploads are decoded as raw text and chunked), so this is a
+  latent-correctness fix — the whole `DocumentProcessor` is currently dead code worth a
+  future review.
 - ✅ **FIXED (2026-06-15) — No input bounds on chat** (`chat_routes.py`, `schemas/chat.py`).
   Question length capped at `MAX_QUESTION_LENGTH` (422 on overflow); `max_chapter` and
   `document_id` query params require `ge=1`. Test in `tests/test_input_bounds.py`.
-- **Nullable DB columns assumed non-null** (`database.py:54`). `content` and `source_type`
-  are nullable but the ingest path dereferences them without checks. `doc_metadata` column is
-  defined but never populated.
-- **Startup reprocessing swallows failure reasons** (`main.py:34`). When `add_document()`
-  returns False at boot, logs say nothing about why.
-- **Unused `BaseLoader` import** (`advanced_document_loaders.py:23`) — dead code.
+- ⏸️ **Nullable DB columns** (`database.py`). Re-examined 2026-06-15: the ingest path does
+  NOT deref unchecked — `add_document` guards `content` and `_process_and_chunk` defaults
+  `source_type` to `'text'`. Adding `nullable=False` now is a no-op on the existing SQLite DB
+  (`create_all` won't alter it) and would desync from `DocumentCreate(content: Optional)`.
+  Deferred to the Phase 2 Postgres/Alembic migration, where the constraint can be applied and
+  the API schema aligned. (`doc_metadata` is defined-but-unused — harmless future field.)
+- ✅ **FIXED (2026-06-15) — Startup reprocessing swallowed failure reasons** (`main.py`). The
+  boot loop now checks `add_document`'s return value and logs a per-document warning on failure.
+- ✅ **FIXED (2026-06-15) — Unused `BaseLoader` import** (`advanced_document_loaders.py`) —
+  removed.
 
 ## Known quirks (deliberately left)
 
