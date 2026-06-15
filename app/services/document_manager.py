@@ -16,8 +16,9 @@ SIMPLIFIED SPOILER MODEL:
 - Reference toggle: Optionally include chunks where is_reference=True
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
+import asyncio
 import json
 import logging
 import re
@@ -27,6 +28,7 @@ from sqlalchemy.orm import Session
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 
+from app.config import settings
 from app.database import LoreDocument
 from app.services.vector_store_manager import VectorStoreManager
 from app.services.advanced_document_loaders import document_processor
@@ -361,8 +363,17 @@ class DocumentManager:
 
         content = db_doc.content
 
-        # Detect chapter structure
-        chapters = self._detect_chapters_in_content(content)
+        # Detect chapter structure. Prefer the hybrid LLM detector (regex anchors
+        # + one LLM labelling call): it numbers chapters in story order and flags
+        # front/back matter, which the regex detector can't. The hybrid returns []
+        # on any LLM failure, so we fall through to the regex detector to preserve
+        # the previous behavior whenever the LLM is disabled or unavailable.
+        chapters: List[Dict[str, Any]] = []
+        if settings.LLM_CHAPTER_DETECTION_ENABLED:
+            chapters = await self._detect_chapters_hybrid(content)
+
+        if len(chapters) < 2:
+            chapters = self._detect_chapters_in_content(content)
 
         if len(chapters) >= 2:
             logger.info("   📖 Detected %d sections in content", len(chapters))
@@ -370,6 +381,40 @@ class DocumentManager:
         else:
             logger.info("   ⚠️ No chapter structure detected, using flat chunking")
             return self._chunk_flat(content, base_metadata)
+
+    async def _detect_chapters_hybrid(
+        self,
+        content: str,
+        invoke: Optional[Callable[[str], Dict]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Run the hybrid LLM chapter detector without blocking the event loop.
+
+        The detector makes one blocking LLM call, so we run it in the default
+        executor. It never raises (returns [] on any LLM/parse failure), so the
+        caller can safely fall back to the regex detector. The labelling call
+        gets a larger output cap than chat answers via the max_tokens override.
+
+        `invoke` is an optional seam for tests (a callable taking the prompt and
+        returning the invoke_with_fallback dict); production callers omit it and
+        get the real provider-fallback client.
+        """
+        from app.services.llm_chapter_detector import detect_chapters_hybrid
+
+        if invoke is None:
+            from app.services.enhanced_rag_service import enhanced_rag_service
+
+            def invoke(prompt: str) -> Dict:
+                return enhanced_rag_service.invoke_with_fallback(
+                    prompt, max_tokens=settings.LLM_CHAPTER_DETECTION_MAX_TOKENS
+                )
+
+        loop = asyncio.get_running_loop()
+        chapters = await loop.run_in_executor(
+            None, lambda: detect_chapters_hybrid(content, invoke=invoke)
+        )
+        if chapters:
+            logger.info("   🤖 Hybrid LLM detector labelled %d sections", len(chapters))
+        return chapters
 
     def _chunk_with_chapters(
             self,

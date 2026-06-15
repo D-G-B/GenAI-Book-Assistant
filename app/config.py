@@ -37,6 +37,19 @@ class Settings:
     RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
     RERANK_POOL_SIZE = int(os.getenv("RERANK_POOL_SIZE", "30"))
 
+    # Chapter Detection Settings
+    # The hybrid detector (regex anchors + one LLM labelling call) runs once at
+    # ingest to number chapters in story order and flag front/back matter — things
+    # the pure-regex detector can't do. Set LLM_CHAPTER_DETECTION_ENABLED=False to
+    # skip it and use the regex detector only. The labelling call emits one JSON
+    # object per section, which needs more output room than a chat answer, so it
+    # gets its own token cap instead of the chat-sized MAX_TOKENS.
+    LLM_CHAPTER_DETECTION_ENABLED = os.getenv("LLM_CHAPTER_DETECTION_ENABLED", "True").lower() == "true"
+    # Default 16000: the first-fallback model gemini-2.5-flash is a "thinking"
+    # model whose reasoning consumes the output-token budget, so the labelling
+    # JSON for a full book truncates below ~16k (verified 1.00 on Dune at 16000).
+    LLM_CHAPTER_DETECTION_MAX_TOKENS = int(os.getenv("LLM_CHAPTER_DETECTION_MAX_TOKENS", "16000"))
+
     def validate_api_keys(self):
         """
         Check if the api keys are present
