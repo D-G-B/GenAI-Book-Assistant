@@ -24,6 +24,12 @@ class Settings:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1000"))
 
+    # Input Limits
+    # Reject oversized uploads before loading them fully into memory (OOM guard),
+    # and cap question length to avoid unbounded token use on a single query.
+    MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+    MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "2000"))
+
     # Retrieval Settings
     RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "8"))
     LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "30"))

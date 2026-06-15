@@ -16,8 +16,8 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 async def ask_question(
     request: ChatRequest,
     db: Session = Depends(get_db),
-    document_id: Optional[int] = Query(None, description="Filter search to specific document"),
-    max_chapter: Optional[int] = Query(None, description="Spoiler protection: only search up to this chapter (None = full book)"),
+    document_id: Optional[int] = Query(None, ge=1, description="Filter search to specific document"),
+    max_chapter: Optional[int] = Query(None, ge=1, description="Spoiler protection: only search up to this chapter (None = full book)"),
     include_reference: bool = Query(False, description="Include reference material (glossary, appendix) when spoiler filter is active")
 ):
     """

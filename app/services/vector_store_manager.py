@@ -356,19 +356,28 @@ class VectorStoreManager:
             return False
 
     def should_rebuild(self, threshold: float = 0.2) -> bool:
-        """Check if index should be rebuilt based on ratio of deleted documents."""
-        if not self.vector_store:
+        """Rebuild when too large a fraction of the index is soft-deleted dead weight.
+
+        Soft-deleted chunks stay in the FAISS index (they're only filtered out at
+        query time), so they bloat it and waste disk until a physical rebuild. The
+        stale fraction is deleted *chunks* / total chunks — counted from the
+        docstore, since `deleted_document_ids` tracks documents, not chunks, and a
+        document maps to many chunks.
+        """
+        if not self.vector_store or not self.deleted_document_ids:
             return False
 
         try:
             total_chunks = self.vector_store.index.ntotal
-            deleted_count = len(self.deleted_document_ids)
-
             if total_chunks == 0:
                 return False
 
-            deleted_ratio = deleted_count / (deleted_count + 10)
-            return deleted_ratio > threshold
+            deleted_chunks = sum(
+                1
+                for doc in self.vector_store.docstore._dict.values()
+                if doc.metadata.get("document_id") in self.deleted_document_ids
+            )
+            return (deleted_chunks / total_chunks) > threshold
         except AttributeError:
             return False
 

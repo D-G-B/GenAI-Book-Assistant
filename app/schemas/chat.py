@@ -3,14 +3,18 @@ Pydantic schemas for Chat and Conversational APIs.
 Includes simplified spoiler model with reference material toggle.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+
+from app.config import settings
 
 # --- Basic Request/Response Models ---
 
 class ChatRequest(BaseModel):
-    question: str
+    # Cap question length to bound per-query token use (whitespace-only is still
+    # rejected in the route). max_length yields a 422 with a clear message.
+    question: str = Field(..., max_length=settings.MAX_QUESTION_LENGTH)
     max_chunks: Optional[int] = 3
 
 class ChatSource(BaseModel):
