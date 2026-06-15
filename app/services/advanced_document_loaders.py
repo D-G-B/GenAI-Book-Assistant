@@ -20,7 +20,6 @@ from langchain_community.document_loaders import (
     JSONLoader,
     TextLoader
 )
-from langchain.document_loaders.base import BaseLoader
 
 
 class EpubLoader:
@@ -388,8 +387,9 @@ class MultiFormatDocumentLoader:
 
     def _load_json(self, file_path: str, metadata: Dict[str, Any]) -> List[Document]:
         """Load JSON file."""
-        # For JSON, we need to specify the content key
-        loader = JSONLoader(file_path, jq_schema='.', text_content=False)
+        # text_content=True so the JSON is loaded as page text; with False the
+        # loader expects a string content-field and would store metadata instead.
+        loader = JSONLoader(file_path, jq_schema='.', text_content=True)
         documents = loader.load()
 
         # Add custom metadata

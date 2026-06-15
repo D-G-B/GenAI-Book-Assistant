@@ -58,7 +58,12 @@ class Settings:
 
     def validate_api_keys(self):
         """
-        Check if the api keys are present
+        Warn about missing keys and key/model mismatches at startup.
+
+        Returns True only if all three provider keys are present. Also warns when a
+        key is set without its matching DEFAULT_*_MODEL: `_initialize_llms` silently
+        skips such a provider, so without this the gap only shows up as missing
+        capacity (or a query-time failure if it leaves no provider configured).
         """
         missing_keys =  []
         if not self.OPENAI_API_KEY:
@@ -70,6 +75,21 @@ class Settings:
 
         if missing_keys:
             logger.warning("Missing API keys: %s. Add them to your .env to use those models.", ", ".join(missing_keys))
+
+        incomplete = [
+            f"{key_name} is set but {model_name} is missing"
+            for key, model, key_name, model_name in (
+                (self.OPENAI_API_KEY, self.DEFAULT_OPENAI_MODEL, "OPENAI_API_KEY", "DEFAULT_OPENAI_MODEL"),
+                (self.ANTHROPIC_API_KEY, self.DEFAULT_CLAUDE_MODEL, "ANTHROPIC_API_KEY", "DEFAULT_CLAUDE_MODEL"),
+                (self.GOOGLE_API_KEY, self.DEFAULT_GEMINI_MODEL, "GOOGLE_API_KEY", "DEFAULT_GEMINI_MODEL"),
+            )
+            if key and not model
+        ]
+        if incomplete:
+            logger.warning(
+                "Incomplete provider config (these providers will be unavailable): %s",
+                "; ".join(incomplete),
+            )
 
         return len(missing_keys) == 0
 

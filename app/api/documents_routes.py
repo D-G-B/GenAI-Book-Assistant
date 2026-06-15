@@ -114,11 +114,8 @@ async def upload_file(
         elif file_extension in ['csv', 'json']:
             content = file_content.decode('utf-8')
 
-        else:
-            try:
-                content = file_content.decode('utf-8')
-            except UnicodeDecodeError:
-                content = f"[Unsupported file type: {file.filename}]"
+        # No else: the `supported` check above already 400s any other extension,
+        # so every branch sets `content` here.
 
         # Create document record
         new_doc = LoreDocument(
