@@ -42,8 +42,13 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, unique=True)
-    username = Column(String(50), nullable=False, index=True, unique=True)
-    email = Column(String(120), nullable=False, index=True)
+    # email is the identity key for OAuth (find-or-create on verified email).
+    email = Column(String(120), nullable=False, index=True, unique=True)
+    # username is optional now — the dev stub uses "dev"; OAuth users leave it null.
+    username = Column(String(50), nullable=True, index=True, unique=True)
+    # OAuth provenance (null for the dev user).
+    oauth_provider = Column(String(50))           # e.g. "google"
+    oauth_sub = Column(String(255), index=True)   # provider's stable subject id
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class LoreDocument(Base):

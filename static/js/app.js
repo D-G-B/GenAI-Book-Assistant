@@ -6,6 +6,78 @@ let sessionId = null;
 let spoilerProtectionEnabled = false;
 let maxChapter = null;
 let includeReference = false;
+let currentUser = null;
+
+// ==========================================
+// AUTHENTICATION
+// ==========================================
+
+function login() {
+    window.location.href = '/auth/login';
+}
+
+function logout() {
+    window.location.href = '/auth/logout';
+}
+
+// Probe the session. Returns the user object, or null when logged out.
+async function checkAuth() {
+    try {
+        const res = await fetch('/auth/me');
+        return res.ok ? await res.json() : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+// Call after any API fetch: if the session has expired (401), drop to the login
+// gate and return false so the caller stops. Returns true to continue.
+function requireAuth(response) {
+    if (response.status === 401) {
+        showLoginGate();
+        return false;
+    }
+    return true;
+}
+
+function renderUserArea(user) {
+    const userArea = document.getElementById('userArea');
+    userArea.innerHTML =
+        `<span class="user-email" style="font-size:0.85em; color:#888;">${user.email}</span>` +
+        `<button class="btn" onclick="logout()" style="margin-left:8px; padding:4px 10px; font-size:0.8em;">Logout</button>`;
+}
+
+// Logged-out view: show a login button in the header, replace the chat with a
+// prompt, and disable the composer so nothing can be sent unauthenticated.
+function showLoginGate() {
+    currentUser = null;
+    const userArea = document.getElementById('userArea');
+    userArea.innerHTML =
+        `<button class="btn" onclick="login()" style="padding:4px 12px; font-size:0.85em;">Login with Google</button>`;
+
+    const messages = document.getElementById('messages');
+    messages.innerHTML =
+        `<div class="message assistant"><p>Please log in to upload books and ask questions.</p>` +
+        `<p style="margin-top:10px;"><button class="btn" onclick="login()">Login with Google</button></p></div>`;
+
+    const questionInput = document.getElementById('questionInput');
+    const askBtn = document.getElementById('askBtn');
+    if (questionInput) questionInput.disabled = true;
+    if (askBtn) askBtn.disabled = true;
+}
+
+async function init() {
+    const user = await checkAuth();
+    if (!user) {
+        showLoginGate();
+        return;
+    }
+    currentUser = user;
+    renderUserArea(user);
+    loadDocuments();
+    loadStatus();
+    setInterval(loadStatus, 30000);
+}
 
 // ==========================================
 // UTILITY FUNCTIONS
@@ -158,6 +230,8 @@ async function uploadDocument() {
             body: formData
         });
 
+        if (!requireAuth(response)) return;
+
         if (response.ok) {
             const doc = await response.json();
             addMessage('assistant', `Document "${doc.title}" uploaded and processed successfully.`);
@@ -177,6 +251,7 @@ async function uploadDocument() {
 async function loadDocuments() {
     try {
         const response = await fetch('/api/v1/documents/list');
+        if (!requireAuth(response)) return;
         const docs = await response.json();
 
         const listDiv = document.getElementById('documentList');
@@ -252,6 +327,7 @@ async function deleteDocument(id) {
     if (!confirm('Delete this document?')) return;
     try {
         const response = await fetch(`/api/v1/documents/${id}`, {method: 'DELETE'});
+        if (!requireAuth(response)) return;
         if (response.ok) {
             loadDocuments();
             loadStatus();
@@ -309,6 +385,8 @@ async function askQuestion() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(body)
         });
+
+        if (!requireAuth(response)) return;
 
         const result = await response.json();
 
@@ -413,6 +491,7 @@ function addMessage(role, content, sources = [], meta = null) {
 async function loadStatus() {
     try {
         const response = await fetch('/api/v1/chat/status');
+        if (!requireAuth(response)) return;
         const status = await response.json();
 
         const statusBadge = document.getElementById('headerStatus');
@@ -454,7 +533,5 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// Initial load
-loadDocuments();
-loadStatus();
-setInterval(loadStatus, 30000);
+// Initial load (gates on auth first)
+init();

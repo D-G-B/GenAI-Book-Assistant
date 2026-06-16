@@ -413,7 +413,14 @@ async def get_document_status(
 
 
 @router.get("/stats/overview")
-async def get_stats(db: Session = Depends(get_db)):
-    """Get overall statistics about document processing."""
+async def get_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get overall statistics about document processing.
+
+    Auth-gated (these are instance-global aggregates; per-user scoping of the
+    counts is deferred — for now we just require a logged-in caller).
+    """
     from app.services.enhanced_rag_service import enhanced_rag_service
     return enhanced_rag_service.document_manager.get_stats()

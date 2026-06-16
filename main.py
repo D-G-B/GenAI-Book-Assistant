@@ -8,8 +8,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
-from app.api import chat_routes, conversational_routes, documents_routes
+from app.api import auth_routes, chat_routes, conversational_routes, documents_routes
 from app.config import settings
 from app.database import Base, LoreDocument, SessionLocal, engine
 
@@ -25,6 +26,27 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Application startup...")
     Base.metadata.create_all(bind=engine)
     settings.validate_api_keys()
+
+    # Fail closed on a forgeable signing key: a known/empty secret lets anyone mint
+    # a session cookie for any user. Allowed only in explicit local-dev modes.
+    if settings.SESSION_SECRET_KEY in ("", "dev-insecure-change-me"):
+        if settings.DEBUG or settings.DEV_AUTH_BYPASS:
+            logger.warning(
+                "SESSION_SECRET_KEY is unset/default — fine for local dev, but sessions are "
+                "forgeable. Set a real value before deploying."
+            )
+        else:
+            raise RuntimeError(
+                "SESSION_SECRET_KEY is unset or the insecure default. Refusing to start. "
+                'Set a strong value (python -c "import secrets; print(secrets.token_hex(32))"), '
+                "or set DEBUG=true / DEV_AUTH_BYPASS=true for local dev."
+            )
+
+    if settings.DEV_AUTH_BYPASS:
+        logger.warning(
+            "DEV_AUTH_BYPASS is ON — every request authenticates as the dev user. "
+            "NEVER enable this in a deployment."
+        )
 
     # Initialize enhanced service (this creates document_manager internally)
     from app.services.enhanced_rag_service import enhanced_rag_service
@@ -74,9 +96,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Signed-cookie session (Increment 2 auth). same_site="lax" lets the cookie ride
+# the OAuth redirect back from Google; https_only adds the Secure flag and is
+# driven by config (set SESSION_COOKIE_SECURE=true wherever the app is on HTTPS).
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SESSION_SECRET_KEY,
+    same_site="lax",
+    https_only=settings.SESSION_COOKIE_SECURE,
+)
+
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+# Auth routes at top-level /auth (callback URL must match the Google redirect URI)
+app.include_router(auth_routes.router)
 
 # API routes
 app.include_router(documents_routes.router, prefix="/api/v1")

@@ -58,8 +58,8 @@ async def ask_question(
 
 
 @router.get("/status", response_model=ServiceStatus)
-async def get_status():
-    """Get the current status of the RAG service."""
+async def get_status(current_user: User = Depends(get_current_user)):
+    """Get the current status of the RAG service (auth-gated)."""
     from app.services.enhanced_rag_service import enhanced_rag_service
 
     return ServiceStatus(**enhanced_rag_service.get_status())

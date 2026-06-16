@@ -19,6 +19,21 @@ class Settings:
     DEFAULT_CLAUDE_MODEL = os.getenv("DEFAULT_CLAUDE_MODEL")
     DEFAULT_GEMINI_MODEL = os.getenv("DEFAULT_GEMINI_MODEL")
 
+    # Auth / Session (Phase 2 Increment 2 — Google OAuth + signed-cookie session)
+    # SESSION_SECRET_KEY signs the session cookie; MUST be set to a real random
+    # value in any non-local deployment (generate: python -c "import secrets; print(secrets.token_hex(32))").
+    SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "dev-insecure-change-me")
+    # Add the Secure flag to the session cookie. Leave False for local http dev;
+    # set True wherever the app is served over HTTPS so the cookie can't be sent
+    # in cleartext (Starlette only emits Secure when https_only=True).
+    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "False").lower() == "true"
+    GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+    GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+    # When True and no session user is present, get_current_user falls back to the
+    # fixed dev user instead of returning 401. Lets local dev / tests run without
+    # Google credentials. NEVER enable in a real deployment.
+    DEV_AUTH_BYPASS = os.getenv("DEV_AUTH_BYPASS", "False").lower() == "true"
+
     # App Settings
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

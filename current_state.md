@@ -256,8 +256,10 @@ Honest list of things absent today, ordered by how much they matter for going pu
   FAISS chunk's metadata, and on conversation sessions; retrieval / list / delete / session
   access are all scoped to the owner. Enforced behind a **stub** `get_current_user` (fixed dev
   user) — see "Phase 2 — Increment 1" below.
-- No real login yet (Increment 2: authlib + Google + cookie session). Behind the stub, every
-  request is still the one dev user, so there is effectively one tenant until Increment 2.
+- ✅ **Increment 2 done (2026-06-16):** real Google login (authlib + Starlette
+  `SessionMiddleware` signed cookie). `get_current_user` now resolves
+  `request.session["user_id"]` (401 when absent); a `DEV_AUTH_BYPASS` env flag falls back to
+  the dev user for local dev. See "Phase 2 — Increment 2" below.
 - Admin/maintenance endpoints are still global (not user-scoped): `POST /documents/{id}/process`,
   `POST /documents/rebuild-index`, `DELETE /documents/all`. `delete_all` wipes **all** users'
   documents — a real cross-tenant footgun to gate in Increment 2.
@@ -290,11 +292,11 @@ Honest list of things absent today, ordered by how much they matter for going pu
 
 ## Recommended next move (Phase 2 sketch)
 
-**Status (2026-06-15): Increment 1 (multi-tenancy) is IMPLEMENTED on `feat/multi-tenancy`;
-Increment 2 (real Google login) is next.** Decisions locked: multi-tenancy refactor first
-behind a stub `get_current_user` (returns a fixed dev user), then real Google login via
-**authlib + a signed-cookie session** — NOT `fastapi-users` (see the corrected recommendation
-below). The full step-by-step handoff is the multi-tenancy + auth plan in `.claude/plans/`.
+**Status (2026-06-16): Increments 1 (multi-tenancy) AND 2 (real Google login) are both
+IMPLEMENTED on `feat/multi-tenancy`.** Decisions locked and delivered: multi-tenancy first
+behind a stub `get_current_user`, then real Google login via **authlib + a signed-cookie
+session** — NOT `fastapi-users` (see the corrected recommendation below). The full
+step-by-step handoff is the multi-tenancy + auth plan in `.claude/plans/`.
 
 ### Phase 2 — Increment 1: Multi-tenancy (IMPLEMENTED 2026-06-15)
 
@@ -335,6 +337,69 @@ seam Increment 2 rewires is that one dependency.
   user-aware (moot under the single dev user); the removed free-form `user_id` query param on
   `/conversation/ask` is now derived from the authenticated user (FastAPI ignores a stray
   `user_id=` query arg, so the same-origin frontend is unaffected).
+
+### Phase 2 — Increment 2: Real Google login (IMPLEMENTED 2026-06-16)
+
+authlib Google OAuth + a Starlette `SessionMiddleware` signed cookie. Only the
+`get_current_user` seam from Increment 1 changed behaviour; every tenancy rule above is
+untouched.
+
+- **Deps** (`pyproject.toml`): added `authlib>=1.3`, `itsdangerous>=2.1`; **pinned
+  `httpx>=0.27,<0.28`** (main + dev). This both satisfies authlib's runtime httpx and
+  **unblocks `TestClient`** — starlette 0.27's TestClient passes `app=` to `httpx.Client`,
+  which 0.28 removed. (Installed: authlib 1.7.2, itsdangerous 2.2.0, httpx 0.27.2.) Bumping
+  starlette/fastapi instead would ripple through the langchain pins, so httpx was the surgical fix.
+- **Session** (`main.py`): `SessionMiddleware(secret_key=SESSION_SECRET_KEY, same_site="lax",
+  https_only=settings.SESSION_COOKIE_SECURE)`. Startup **fails closed** when the secret is
+  unset/default unless `DEBUG` or `DEV_AUTH_BYPASS` is set; `DEV_AUTH_BYPASS` logs a loud warning.
+- **Config** (`config.py`): `SESSION_SECRET_KEY`, `SESSION_COOKIE_SECURE` (Secure cookie flag,
+  default False — set true on HTTPS), `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`, `DEV_AUTH_BYPASS` (default False).
+- **OAuth + seam** (`app/auth.py`): `oauth.register("google", server_metadata_url=<OIDC
+  discovery>, scope="openid email profile")` only when creds are present; `find_or_create_user`
+  (identity = verified email; backfills oauth provenance); `get_current_user(request, db)` reads
+  `request.session["user_id"]` → 401, or the dev user when `DEV_AUTH_BYPASS`.
+- **Routes** (`app/api/auth_routes.py`, mounted at **top-level `/auth`** so the callback matches
+  Google's redirect URI): `/auth/login`, `/auth/callback` (verifies `email_verified`, sets
+  session, 303 home), `/auth/logout`, `/auth/me` (401 when logged out — the frontend's gate).
+- **Model** (`database.py`): `User.email` now `unique=True`; `username` nullable; added
+  `oauth_provider` / `oauth_sub`.
+- **Frontend** (`templates/index.html` + `static/js/app.js`): `init()` calls `/auth/me`; logged
+  out → "Login with Google" gate + disabled composer; logged in → email + Logout. `requireAuth()`
+  drops to the gate on any 401 mid-session. Same-origin `fetch`, so the cookie rides automatically.
+- **`.env.example`**: created (was missing) — full template incl. the Google + session vars.
+- **Tests**: `tests/test_auth.py` (8, via `TestClient` with Google mocked, offline): enforcement
+  401s, `DEV_AUTH_BYPASS`, callback creates-user/sets-session, unverified-email 403, logout,
+  same-email-same-account. **Suite 98 → 106**, ~1s, no API keys.
+
+**⚠️ Same DB reset still applies** (the Increment 1 `user_id` column + now `User.email unique` /
+new oauth columns): `rm -f app.db && rm -rf faiss_index/` before first run, then re-ingest.
+
+**Manual Google Cloud setup (free; required to actually log in):**
+1. console.cloud.google.com → APIs & Services → **OAuth consent screen** → External; add your
+   own Google account under **Test users**.
+2. **Credentials → Create OAuth client ID → Web application.** Authorized redirect URI:
+   `http://localhost:8000/auth/callback`.
+3. Put the client ID/secret + a real `SESSION_SECRET_KEY`
+   (`python -c "import secrets; print(secrets.token_hex(32))"`) in `.env`.
+4. To run locally *before* doing this, set `DEV_AUTH_BYPASS=true` in `.env` (dev user, no
+   login). Required anyway now: with no `SESSION_SECRET_KEY`, the app refuses to start unless
+   `DEV_AUTH_BYPASS=true` or `DEBUG=true`.
+
+**Adversarial security review (2026-06-16): 7 findings, all fixed before commit.** A multi-agent
+review (4 reviewers × independent verifiers) confirmed and we fixed: (HIGH) session cookie now
+gets `Secure` via `SESSION_COOKIE_SECURE`; (HIGH) insecure default secret now fails closed at
+startup + `.env.example` ships it empty; (MED) `/documents/stats/overview` **and** `/chat/status`
+were unauthenticated aggregate leaks → now `Depends(get_current_user)`; (MED) `DEV_AUTH_BYPASS`
+now logs a loud startup warning; (MED) `find_or_create_user` logs on `oauth_sub` mismatch
+(email-reuse signal); (MED) the create-create race now catches `IntegrityError` and re-queries;
+(MED) `email_verified` check is fail-closed (`if not ...`). Tests in `test_auth.py` cover the
+gating + the verified-email gate. Suite **106 → 109**.
+
+**Still global / to gate later** (carried from Increment 1, intentionally): `POST
+/documents/{id}/process`, `POST /documents/rebuild-index`, `DELETE /documents/all`.
+`/auth/logout` is a GET (CSRF-able logout — low severity; make it POST if hardening). No CSRF
+tokens on state-changing POSTs yet. `/chat/status` + `/documents/stats/overview` are auth-gated
+but their counts are still instance-global (per-user scoping deferred).
 
 Roughly the order, each its own commit-able unit:
 
