@@ -50,6 +50,11 @@ packages = ["app"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
+markers = [
+    "retrieval: builds a real FAISS index (loads the local embedding model); offline but slower than the unit suite. Skip with -m 'not retrieval'.",
+    "eval: heavier eval-harness wrappers (may need a book file or API keys).",
+    "e2e: exercises the app end-to-end.",
+]
 
 [dependency-groups]
 dev = [
