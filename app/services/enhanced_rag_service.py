@@ -233,7 +233,10 @@ class EnhancedRAGService:
             "answer. Do not use outside knowledge.\n"
             "4. **Spoilers**: Answer the specific question asked. Do not reveal major "
             "future plot twists unless explicitly asked.\n"
-            "5. **Clarity**: Be precise with spelling and relationships.\n\n"
+            "5. **Clarity**: Be precise with spelling and relationships.\n"
+            "6. **Honesty**: If the provided context does not actually answer the question, "
+            'say so plainly (e.g. "I can\'t determine that from the available chapters.") — '
+            "do NOT guess, infer a likely answer, or fill the gap with outside knowledge.\n\n"
             "Answer:"
         ),
         input_variables=["context", "question"],
