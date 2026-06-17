@@ -1,6 +1,7 @@
 # Current State
 
-A snapshot of where the project sits at the end of the Phase 1 hardening pass.
+A living snapshot of where the project sits. Latest pass: RAG-quality test suite + retrieval
+diagnostics (2026-06-17) — see the dated section just below.
 
 ## Branch
 
@@ -31,6 +32,75 @@ d659dd7 eval: hand-labeled Dune real-book fixture + live regex-vs-LLM results
 48f4d6b eval: abort chapter eval loudly when no LLM provider works
 32fc244 experiment: standalone LLM chapter detector + head-to-head eval vs regex
 ```
+
+## RAG-quality test suite + retrieval diagnostics (2026-06-17)
+
+A focused pass to make retrieval *testable end-to-end* and a wrong/low-quality answer
+*diagnosable* — motivated by a confirmed real miss: in spoiler mode (references off) the Dune
+query "What happens to Baron Vladimir Harkonnen — does he die?" fails to retrieve the narrative
+chapter that actually holds the death (Ch 47, written allusively via "gom jabbar"/Alia), so the
+model can't answer faithfully. All work is test-/diagnostic-only except two small runtime touches
+(a DEBUG-only trace log and one prompt instruction); **no API surface changed**. Suite
+**109 → 120**; fast loop (`-m "not retrieval"`) still ~1s.
+
+### End-to-end retrieval tests (real FAISS, not the filter closure)
+- **Markers** (`pyproject.toml`): `retrieval` marks tests that build a real FAISS index (loads
+  the local MiniLM model — offline but slower). Skip with `-m "not retrieval"` to keep the unit
+  loop ~1s. (`eval`/`e2e` markers are declared for future harness wrappers; only `retrieval` is
+  used today.)
+- **Fixture** (`tests/conftest.py`): session-scoped `retrieval_index` builds ONE real index from
+  the synthetic corpus (reranker pinned OFF for reproducibility; throwaway tmp dir — never touches
+  `./faiss_index`). Skips the whole layer if the model can't load offline; set
+  `RAG_REQUIRE_RETRIEVAL_TESTS=1` to turn that skip into a hard failure (e.g. a pre-warmed CI step).
+- **Synthetic corpus** (`tests/fixtures/retrieval_corpus.py`): copyright-free, modeled on the
+  Baron failure shape — antagonist alive/scheming across many chapters, an oblique late death
+  chapter, a reference/appendix stating the death plainly (the spoiler-excluded copy), plus a
+  second user's chunk (tenancy) and a soft-deletable doc. Stamped with the exact metadata keys
+  production stamps.
+- **Tests**: `test_retrieval_e2e.py` (spoiler / reference inclusion / tenancy / soft-delete /
+  k-after-aggressive-fetch — deterministic because they test *filtering*: a filtered chunk can
+  never be returned), `test_retrieval_recall.py` (retrieval sanity + an offline *grounding* check:
+  do the required answer keywords appear in the retrieved context at all? — if not, no prompt can
+  make the answer faithful).
+
+### The Baron miss, reproduced in the eval harness
+- `tests/eval/run_eval.py` gained a **chapter-recall** secondary metric: for rows that pin an
+  `expected_chapter`, did retrieval surface a chunk from the chapter that actually holds the
+  answer? Keyword-containment is fooled by allusive prose (a death scene that never says "died");
+  chapter-hit is the honest signal. Per-row spoiler filters (`max_chapter` / `include_reference`)
+  are now honored so a row can reproduce the spoiler-mode miss.
+- New `dune_qa.jsonl` row (Baron fate, spoiler mode, refs off). Run against the production hybrid
+  index for chapter numbers to line up: `--cache-dir faiss_index`. Live result reproduced the
+  miss — **chapter-recall MISS: Ch 47 not retrieved** (got [8, 21, 26]).
+- NOTE: the miss does NOT reliably reproduce on the ~12-chunk synthetic corpus (it's a
+  big-haystack ranking effect), which is why the synthetic recall test is a *sanity* guard and the
+  real miss lives in the Dune harness. (Documented in `test_retrieval_recall.py`.)
+
+### Retrieval-trace DEBUG logging (`vector_store_manager.py`)
+- Per-query trace on a dedicated child logger `app.services.vector_store_manager.trace`, emitted
+  at **DEBUG only** and **skipped entirely when DEBUG is off** (no cost via an `isEnabledFor`
+  guard): retrieved chunks (chapter / is_reference / normalized score), filter-survivor count,
+  reference-in-top-k count, and any rerank reorder (before/after by FAISS). This is the diagnostic
+  that would have made the Baron miss obvious at a glance. INFO still emits the single per-query
+  scope line (unchanged).
+- Tests: `test_retrieval_trace.py` (content at DEBUG + the perf contract that nothing logs at INFO
+  and no model loads).
+
+### Prompt hardening — honesty rule (`enhanced_rag_service.py`)
+- `_ANSWER_PROMPT` gained instruction 6: if the provided context doesn't actually answer the
+  question, say so plainly rather than guess, infer, or fill from outside knowledge. Pairs with
+  the grounding test — when retrieval misses, the correct behavior is to decline, not hallucinate.
+
+### Deliberately deferred
+- **`?debug=true` API exposure (NOT built).** The DEBUG-log trace already meets the diagnostic
+  need and there's no API consumer yet (no frontend debug panel), so per CLAUDE.md (no speculative
+  surface) it's deferred. Small pickup when a consumer appears: `return_trace=True` on
+  `search_with_scores` (return the existing `_log_retrieval_trace` content as a dict instead of
+  only logging it), a `debug` query param on `/chat/ask` + `/conversation/ask` threaded through
+  `ask_question` / `ask_with_context`, and an additive `debug: Optional[dict]` on `ChatResponse`
+  (inherited by `ConversationResponse`) — all gated behind `settings.DEBUG`.
+- **Shared test helpers** (the tiny per-file `contents()` / `chapters()` helpers) — left local;
+  extracting them now would be a single-use abstraction.
 
 ## What was hardened
 
@@ -288,7 +358,10 @@ Honest list of things absent today, ordered by how much they matter for going pu
 - MiniLM embeddings (384-dim). Newer models like `nomic-embed-text-v1.5` or `bge-m3` are stronger.
 - No BM25 hybrid retrieval (lexical + semantic).
 - No query rewriting beyond pronoun resolution.
-- No answer faithfulness checks (does the LLM answer match the cited chunks?).
+- No *automated* answer-faithfulness judge (LLM scoring answer-vs-cited-chunks). First steps
+  added 2026-06-17: an offline *grounding* test (are the answer keywords present in retrieved
+  context?) + a prompt honesty rule (decline when context doesn't support an answer). A true
+  answer-vs-chunks judge is still absent.
 
 ## Recommended next move (Phase 2 sketch)
 
@@ -478,8 +551,10 @@ What the next session needs to know before running anything live:
 ## Run commands you'll want again
 
 ```bash
-# Tests
+# Tests (full suite, incl. real-FAISS retrieval tests — loads the embedding model)
 uv run pytest tests/
+# Fast unit loop only (skip the embedding-model retrieval tests, ~1s)
+uv run pytest -m "not retrieval"
 
 # Retrieval eval
 uv run python -m tests.eval.run_eval --rebuild
