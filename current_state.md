@@ -362,6 +362,10 @@ Honest list of things absent today, ordered by how much they matter for going pu
   added 2026-06-17: an offline *grounding* test (are the answer keywords present in retrieved
   context?) + a prompt honesty rule (decline when context doesn't support an answer). A true
   answer-vs-chunks judge is still absent.
+- **Implicit/allusive content isn't retrieved reliably** (e.g. an obliquely-written death the
+  query doesn't share vocabulary with). Confirmed inherent to dense retrieval, not a bug; the
+  problem analysis + how the field addresses it (hybrid search, HyDE, Contextual Retrieval,
+  RAPTOR, GraphRAG) is written up in [retrieval_quality_research.md](retrieval_quality_research.md).
 
 ## Recommended next move (Phase 2 sketch)
 
