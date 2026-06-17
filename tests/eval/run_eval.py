@@ -17,7 +17,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("eval")
@@ -143,7 +143,7 @@ def chunk_content(content: str, document_title: str):
 
 # ---------- Index build / load ----------
 
-def build_or_load_index(book_path: Path, cache_dir: Path, rebuild: bool):
+def build_or_load_index(book_path: Optional[Path], cache_dir: Path, rebuild: bool):
     from app.services.vector_store_manager import VectorStoreManager
 
     if rebuild and cache_dir.exists():
@@ -154,8 +154,15 @@ def build_or_load_index(book_path: Path, cache_dir: Path, rebuild: bool):
     vsm = VectorStoreManager(persist_path=str(cache_dir))
 
     if vsm.vector_store is not None:
+        # Reuse a cached index — e.g. `--cache-dir faiss_index` to evaluate against
+        # the production (hybrid-chunked) index, where chapter numbers match the app.
         logger.info("Reusing cached index at %s", cache_dir)
         return vsm
+
+    if book_path is None:
+        book_path = find_default_book()
+    if not book_path.exists():
+        raise SystemExit(f"Book not found: {book_path}")
 
     logger.info("Building index from %s", book_path.name)
     content = extract_text(book_path)
@@ -175,21 +182,43 @@ def build_or_load_index(book_path: Path, cache_dir: Path, rebuild: bool):
 def evaluate(vsm, qa_pairs: List[Dict[str, Any]], k: int = 5) -> List[Dict[str, Any]]:
     results = []
     for pair in qa_pairs:
-        retrieved = vsm.search_with_scores(pair["question"], k=k)
+        # Optional per-question spoiler filters — lets a row reproduce the
+        # spoiler-mode recall miss (references excluded) where it actually occurs.
+        retrieved = vsm.search_with_scores(
+            pair["question"],
+            k=k,
+            max_chapter=pair.get("max_chapter"),
+            include_reference=pair.get("include_reference", False),
+        )
         keywords = [kw.lower() for kw in pair["expected_chunks_contain_keywords"]]
 
         matched = set()
+        retrieved_chapters = set()
         for doc, _ in retrieved:
             content_lower = doc.page_content.lower()
             for kw in keywords:
                 if kw in content_lower:
                     matched.add(kw)
+            ch = doc.metadata.get("chapter_number")
+            if ch is not None:
+                retrieved_chapters.add(ch)
+
+        # chapter_hit is the honest signal for answers written ALLUSIVELY (e.g. a
+        # death scene that never says "died") where keyword-containment is fooled:
+        # did we retrieve a chunk from the chapter that actually holds the answer?
+        expected_chapter = pair.get("expected_chapter")
+        chapter_hit = (
+            expected_chapter in retrieved_chapters if expected_chapter is not None else None
+        )
 
         results.append({
             "question": pair["question"],
             "expected_keywords": pair["expected_chunks_contain_keywords"],
             "matched_keywords": sorted(matched),
             "hit": len(matched) > 0,
+            "expected_chapter": expected_chapter,
+            "chapter_hit": chapter_hit,
+            "retrieved_chapters": sorted(retrieved_chapters),
             "retrieved_count": len(retrieved),
         })
     return results
@@ -198,12 +227,22 @@ def evaluate(vsm, qa_pairs: List[Dict[str, Any]], k: int = 5) -> List[Dict[str, 
 def summarize(results: List[Dict[str, Any]], k: int) -> Dict[str, Any]:
     total = len(results)
     hits = sum(1 for r in results if r["hit"])
-    return {
+    summary = {
         "metric": f"recall@{k}",
         "hits": hits,
         "total": total,
         "score": hits / total if total else 0.0,
     }
+    # Secondary metric over only the rows that pin an expected_chapter.
+    chaptered = [r for r in results if r.get("chapter_hit") is not None]
+    if chaptered:
+        ch_hits = sum(1 for r in chaptered if r["chapter_hit"])
+        summary["chapter_recall"] = {
+            "hits": ch_hits,
+            "total": len(chaptered),
+            "score": ch_hits / len(chaptered),
+        }
+    return summary
 
 
 # ---------- Entry ----------
@@ -218,20 +257,16 @@ def main():
     parser.add_argument("--k", type=int, default=5)
     args = parser.parse_args()
 
-    book = args.book or find_default_book()
-    if not book.exists():
-        raise SystemExit(f"Book not found: {book}")
-
     qa_pairs = load_qa_pairs(args.qa)
     logger.info("Loaded %d Q/A pairs", len(qa_pairs))
 
-    vsm = build_or_load_index(book, args.cache_dir, args.rebuild)
+    vsm = build_or_load_index(args.book, args.cache_dir, args.rebuild)
     results = evaluate(vsm, qa_pairs, k=args.k)
     summary = summarize(results, k=args.k)
 
     output = {
         "timestamp": datetime.now().isoformat(),
-        "book": book.name,
+        "book": args.book.name if args.book else args.cache_dir.name,
         "stack": {
             "embeddings": "all-MiniLM-L6-v2",
             "chunker": "RecursiveCharacterTextSplitter(1000/200)",
@@ -245,6 +280,15 @@ def main():
     args.out.write_text(json.dumps(output, indent=2), encoding="utf-8")
 
     print(f"\nrecall@{args.k}: {summary['score']:.2f} ({summary['hits']}/{summary['total']})")
+    if "chapter_recall" in summary:
+        cr = summary["chapter_recall"]
+        print(f"chapter-recall@{args.k}: {cr['score']:.2f} ({cr['hits']}/{cr['total']})")
+        for r in results:
+            if r.get("chapter_hit") is False:
+                print(
+                    f"  MISS  ch{r['expected_chapter']} not retrieved "
+                    f"(got {r['retrieved_chapters']}): {r['question']}"
+                )
     print(f"Results written to {args.out}")
     return 0
 

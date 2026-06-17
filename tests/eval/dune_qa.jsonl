@@ -8,3 +8,4 @@
 {"question": "Who is the leader of House Harkonnen?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Vladimir", "Baron"]}
 {"question": "What is a stillsuit and what does it do?", "expected_chapter": null, "expected_chunks_contain_keywords": ["stillsuit", "moisture", "water"]}
 {"question": "Who is Stilgar and what group does he lead?", "expected_chapter": null, "expected_chunks_contain_keywords": ["Stilgar", "Fremen"]}
+{"question": "What happens to Baron Vladimir Harkonnen at the end? Does he die?", "max_chapter": 48, "include_reference": false, "expected_chapter": 47, "expected_chunks_contain_keywords": ["gom jabbar", "Alia"], "note": "Spoiler-mode (refs off): the death is in the narrative Ch 47 (Alia/gom jabbar), in-range, but allusively worded. chapter_hit measures whether retrieval surfaces it. Run against the production hybrid index for chapter numbers to match: --cache-dir faiss_index"}
