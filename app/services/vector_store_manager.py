@@ -23,6 +23,9 @@ from langchain.schema import Document
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+# Per-query retrieval trace (chunks retrieved, filter survivors, rerank reorder).
+# Emitted at DEBUG only; named so it can be filtered independently of INFO logs.
+_trace_logger = logger.getChild("trace")
 
 
 class VectorStoreManager:
@@ -263,6 +266,12 @@ class VectorStoreManager:
         Returns a list of (Document, score) tuples. The score is always the
         original FAISS L2 distance (lower = closer); reranking only changes
         order, never the score values, so normalize_score() math is preserved.
+
+        Logging contract: INFO stays a single scope line per query (emitted by the
+        caller in ask_question); at DEBUG, `_trace_logger` emits a per-query
+        retrieval trace (the retrieved chunks' chapter/is_reference/score, filter
+        survivor count, and any rerank reorder) so a wrong/low-quality answer can be
+        diagnosed. The trace is skipped entirely when DEBUG is off (no cost).
         """
         if self.vector_store is None:
             return []
@@ -282,9 +291,50 @@ class VectorStoreManager:
         )
 
         if self.reranker is None or len(candidates) <= 1:
-            return candidates[:k]
+            results = candidates[:k]
+        else:
+            results = self.reranker.rerank(query, candidates, top_k=k)
 
-        return self.reranker.rerank(query, candidates, top_k=k)
+        if _trace_logger.isEnabledFor(logging.DEBUG):
+            self._log_retrieval_trace(
+                query, results, candidates, retrieve_k, fetch_k, k,
+                document_id, max_chapter, include_reference, user_id,
+            )
+        return results
+
+    def _log_retrieval_trace(
+        self, query, results, candidates, retrieve_k, fetch_k, k,
+        document_id, max_chapter, include_reference, user_id,
+    ) -> None:
+        """Emit a DEBUG retrieval trace. Aggregates here, never in the per-candidate filter."""
+        reranked = self.reranker is not None and len(candidates) > 1
+        ref_in_topk = sum(1 for d, _ in results if d.metadata.get("is_reference"))
+        scope = (
+            f"document_id={document_id} max_chapter={max_chapter} "
+            f"include_reference={include_reference} user_id={user_id}"
+        )
+        # NOTE: with a filter, similarity_search_with_score returns only survivors,
+        # so len(candidates) is the post-filter pool size (capped at retrieve_k).
+        lines = [
+            f"retrieval trace q={query!r}",
+            f"  scope: {scope}",
+            f"  retrieve_k={retrieve_k} fetch_k={fetch_k} k={k} "
+            f"survivors={len(candidates)} reranked={reranked} returned={len(results)} "
+            f"reference_in_topk={ref_in_topk}/{len(results)}",
+            "  top-k returned:",
+        ]
+        for rank, (doc, score) in enumerate(results, 1):
+            m = doc.metadata
+            lines.append(
+                f"    #{rank} doc={m.get('document_id')} ch={m.get('chapter_number')} "
+                f"ref={bool(m.get('is_reference'))} sim={self.normalize_score(score):.3f} "
+                f"title={m.get('document_title')!r}"
+            )
+        if reranked:
+            before = ", ".join(f"ch{d.metadata.get('chapter_number')}" for d, _ in candidates[:k])
+            after = ", ".join(f"ch{d.metadata.get('chapter_number')}" for d, _ in results)
+            lines.append(f"  rerank order  before(top{k} by FAISS)=[{before}]  after=[{after}]")
+        _trace_logger.debug("\n".join(lines))
 
     @staticmethod
     def normalize_score(raw_score: float) -> float:
